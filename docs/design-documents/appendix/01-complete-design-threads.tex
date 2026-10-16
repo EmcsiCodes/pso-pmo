@@ -1,0 +1,697 @@
+
+\chapter{A Complete and Detailed Design for Module \textit{Threads}}
+
+
+% ================================================================================= %
+\section{Assignment Requirement}
+
+
+% -------------------------------------------------- %
+\subsection{Initial Functionality}
+
+\subsubsection{Timer}
+
+We are given an implementation of the executive timer (see file \lstinline|ex_timer.c|), which is based on busy-waiting, i.e. a loop where the time expiration condition is checked continuously, keeping the CPU busy.
+
+\subsubsection{Priority Scheduler. Fixed Priority Scheduler}
+
+We are given an implementation of a Round-Robin scheduling policy (see function \lstinline|_ThreadGetReadyThread()| in file \lstinline|thread.c|), which consider all threads equal, giving them CPUs based on FCFS (First-Come First-Served) principle and only for a predefined time slice. We are also given the implementation of thread switching mechanism (see function \lstinline|ThreadSwitch| in file \lstinline|_thread.yasm|). 
+
+\subsubsection{Priority Scheduler. Priority Donation}
+
+Same given code as described at previous section. 
+
+\subsubsection{Advanced Scheduler (MLFQ). Dynamic-Priority Scheduler}
+
+Same given code as described at previous section. 
+
+
+% -------------------------------------------------- %
+\subsection{Requirements}
+
+\subsubsection{Timer}
+
+We must change the given executive timer functionality, such that to not use anymore the busy waiting technique in function \lstinline|ExTimerWait()|, but a blocking mechanism, which suspends the waiting thread (i.e. takes the CPU from it) until the waited timer expires. 
+
+\subsubsection{Priority Scheduler. Fixed Priority Scheduler}
+\label{subsubsec:prio-sched}
+
+We must implement a priority-based thread scheduling policy (algorithm), which means the scheduler must consider threads' priorities when deciding which thread to be given an available CPU. The main scheduling rule is that when a thread must be chosen, the one with the higher priority must be the choice. 
+The scheduler must be preemptive, which means it must always assure that threads with the highest priorities (considering multiple CPUs) are the ones run at any moment. This could suppose a currently running thread could be suspended, when a new higher-priority thread occurs. 
+
+
+\subsubsection{Priority Scheduler. Priority Donation}
+
+We must implement (temporary) priority donation as a solution to the ``priority inversion'' problem. Priority inversion correspond to situations when a thread with a higher priority wait for a thread with a smaller priority (contrary to the priority-based rule, which requires the opposite). Such a situation occur when a thread with a smaller priority succeeds taking a lock, which will be later on required by a higher-priority thread. In order to avoid having the higher-priority thread waiting for smaller-priority threads (others than the lock holder, but having a higher priority than it), the higher thread donates its priority to the lock holder (smaller thread) until the lock will be released. In the meantime, no other ``in-between'' thread, could block the lock holder and consequently the waiting higher-priority thread.  
+
+\subsubsection{Advanced Scheduler (MLFQ). Dynamic-Priority Scheduler}
+
+We must implement a priority-based scheduler, but differently by the one describe at Section~\ref{subsubsec:prio-sched}, we must establish thread priority dynamically, during thread runtime, based on some given criteria (like time consumed for running, i.e. using, on the CPU, time spent waiting for a CPU or for some other event). The required algorithm is called multi-level feedback queue (MLFQ), suggesting the continuous increase or decrease of thread priorities, based on their runtime behavior.
+
+
+% -------------------------------------------------- %
+\subsection{Basic Use Cases}
+
+\subsubsection{Timer}
+
+A user application could use a timer to have one of its threads periodically (e.g. every one second) increasing a counter and displaying it on the screen. This could be a sort of wall-clock. 
+
+
+\subsubsection{Priority Scheduler. Fixed Priority Scheduler}
+
+A user application could establish different priorities for its different threads, based on some application specific criteria. Similarly, the OS itself could create a (kernel) thread to handle critical system events, giving that thread a higher priority than those of all other user-application threads. 
+
+
+\subsubsection{Priority Scheduler. Priority Donation}
+
+This is not directly visible to and controlled by a user application, but has effects on scheduling performance, in the sense that high-priority threads will not be delayed too much when competing for locks with smaller-priority threads (already having those locks). It could be difficult to create a use case (in a user application) to measure the correctness and effectiveness of such a mechanism, but we could image a use case in kernel (as we already have in the given tests). An example in this sense could be the following scenario:
+\begin{enumerate}
+    \item start a testing thread, which will take the following steps
+    \item creates a smaller-priority thread, which takes a lock;
+    \item after being sure the lock was taken by the smaller-priority thread, creates a second, higher priority thread, which wants to take the same lock; we must see the current lock holder is given (donated) the higher-priority thread;
+    \item while the smaller-priority thread is still keeping the lock, other threads, with priorities between the small and high threads could be created, which we must see that will not suspend the small-priority thread holding the lock;
+    \item the small-priority thread releases the lock, and we must see that its priority goes back to its original one;
+    \item the main thread waits until all created threads terminates, before terminating itself.
+\end{enumerate}
+
+
+
+\subsubsection{Advanced Scheduler (MLFQ). Dynamic-Priority Scheduler}
+
+This kind of functionality is also almost invisible from user space and there is no explicit way to control or test it from there. It generally could be tested by observing the way the interactive threads in user applications react to user input. Such threads are blocked most of the time, waiting for use input (e.g. keyboard taste, mouse click), but it is very important to be given a priority boost when awaken, such that to be able to rapidly get the CPU to give the user a fast response. This could only be obtain if MLFQ scheduling is used and the priority changing criteria are well tuned. 
+
+
+% ================================================================================= %
+\section{Design Description}
+
+% -------------------------------------------------- %
+\subsection{Needed Data Structures and Functions}
+
+\subsubsection{Timer}
+\label{subsubsec:timer-data-structures}
+
+We will change the \lstinline|_EX_TIMER| structure in the following way:
+
+\begin{lstlisting}
+struct _EX_TIMER
+{
+    ...
+    
+    // keep track of threads waiting (blocked) for the timer
+    EX_EVENT    TimerEvent;    
+
+    // used to place the timer in a global timer list
+    LIST_ENTRY  TimerListElem; 
+    
+    ...
+} EX_TIMER, *PEX_TIMER;
+\end{lstlisting}
+
+We add a global list keeping track of all timers in the system and a lock to protect this list while accessed concurrently:
+\begin{lstlisting}
+
+struct _GLOBAL_TIMER_LIST
+{
+    // protect the global timer list
+    LOCK                TimerListLock;
+
+    // the list's head
+    LIST_ENTRY          TimerListHead;
+
+}; 
+
+static struct _GLOBAL_TIMER_LIST m_globalTimerList;    
+\end{lstlisting}
+
+Functions that we will change:
+\begin{itemize}
+    \item \lstinline|ExTimerInit()|: add the new timer in the global timer list;
+    \item \lstinline|ExTimerStop()|: signal waiting threads, the timer is no longer evolving;
+    \item \lstinline|ExTimerWait()|: replace the busy-waiting with the blocking technique;
+    \item \lstinline|ExTimerUninit()|: remove the timer from the global timer list.
+\end{itemize}
+
+New functions that we will add to file \lstinline|ex_timer.c|:
+\begin{itemize}
+    \item \lstinline|ExTimerSystemPreinit(void)|: initialize the global timer list and its associated lock;
+    \item \lstinline|ExTimerCompareListElems(PLIST_ENTRY t1, PLIST_ENTRY t2, PVOID context)|: compare two timer trigger time in order to keep the global timer list order by timer triggering time;
+    \item \lstinline|ExTimerCheck(PEX_TIMER timer)|: called on each timer interrupt handling to check for a particular timer if it must be triggered or not;
+    \item \lstinline|ExTimerCheckAll(void)|: called on each timer interrupt handling to check for all timers in the global timer list if they must be triggered or not.
+\end{itemize}
+
+
+\subsubsection{Priority Scheduler. Fixed Priority Scheduler}
+\label{subsubsec:prio-sched-data-structures}
+
+We need to take into account the threads' priorities, but as long as this is a field already existing in the \lstinline|_THREAD| structure, we must only use it. 
+
+\begin{lstlisting}
+typedef struct _THREAD
+    ...
+    
+    THREAD_PRIORITY         Priority;
+    
+    ...
+};
+\end{lstlisting}
+
+% % I renounced the idea, while it is not so simple to compute the actual value of such a variable, especially when a thread terminates.
+% In order to keep track of the minimum priority of all threads running at one moment, we will keep a global variable \lstinline|RunningThreadsMinPriority| for this, placed in the \lstinline|_THREAD_SYSTEM_DATA| structure. Because we also work on the \lstinline|ReadyThreadsList|, we also illustrate it below:
+% \begin{lstlisting}
+% typedef struct _THREAD_SYSTEM_DATA
+%     ...
+%     _Guarded_by_(ReadyThreadsLock)
+%     LIST_ENTRY          ReadyThreadsList;
+
+% 	_Guarded_by_(ReadyThreadsLock)
+%     THREAD_PRIORITY     RunningThreadsMinPriority;
+% };   
+% \end{lstlisting}
+
+The functions (all in \lstinline|thread.c|) we will make changes in or just use are:
+\begin{itemize}
+    \item \lstinline|ThreadSystemPreinit()|;
+    
+    \item \lstinline|ThreadYield()|: change it such that to consider thread priorities;
+    
+    \item \lstinline|ThreadUnblock()|: change it such that to consider thread priorities; in particular when a thread with a higher priority of any other running thread is unblock, one of the smaller-priority running threads must be preempted;
+
+    \item \lstinline|MutexAcquire()|: keep the mutex's waiting queue ordered by thread priorities, such that when the mutex become available, the thread with the highest priority in the mutex's waiting queue to be unblocked;
+    
+    \item \lstinline|ExEventWaitForSignal()|: to keep the event's waiting list ordered by thread priorities.
+    
+    \item \lstinline|ThreadSetPriority()|: force the currently running thread give up the CPU, if its new priority is smaller than that of any thread in the ready list;
+    
+    \item \lstinline|SmpSendGenericIpi()|: send an inter-processor interrupt (IPI) to require all CPUs recheck the ready list, such that to be sure that the running threads are always the ones with the highest priority; used when a new thread is unblocked.
+\end{itemize}
+
+The new functions that we will add are:
+\begin{itemize}
+    \item \lstinline|ThreadComparePriorityReadyList(PLIST_ENTRY e1, PLIST_ENTRY e2, PVOID Context)|: compares the two threads, \texttt{t1} and \texttt{t2}, based on their priority; it will be used to keep the thread lists ordered based on their priorities (descending order);
+    
+    \item \lstinline|ThreadYieldForIpi|: to be run by CPUs while receiving an IPI, when a running thread must be preempted by an unblocked thread with a greater priority.
+\end{itemize}
+
+
+\subsubsection{Priority Scheduler. Priority Donation}
+\label{subsubsec:prio-donation-data-structures}
+
+Priority donation supposes giving a thread a new temporal priority, while that thread is holding a mutex. We must be able to restore such a thread's priority back to its original one, so logically, we must keep track of both types of priorities. The two priorities are called in related literature (or other real OSes) the \textit{real priority} (or original priority), the priority established at thread creation or changed during thread execution by the thread itself, and the \textit{effective priority} (or actual priority), the priority dynamically established by the OS (based on different internal criteria) and considered by the priority-based OS' scheduler. Based on this basic deduction and on the analysis described in Section~\ref{subsubsec:prio-donation-analysis-and-design}, we established the need for the following new fields in existing data structure or new data structures. While there were already a field ``\lstinline|Priority|'' associated to each thread, and some tests consider it as the effective one, we let its name unchanged, and only added a new field for what we consider to be the real priority.
+
+In file \lstinline|thread_internal.h|:
+
+\begin{lstlisting}
+ struct _THREAD
+ {
+    LOCK                PriorityProtectionLock;
+ 
+    _Guarded_by_(PriorityProtectionLock)
+    THREAD_PRIORITY     Priority;       // the effective priority (already defined)
+
+    ...
+    
+    // Used for priority donation
+    _Guarded_by_(PriorityProtectionLock)
+    THREAD_PRIORITY     RealPriority;    // the real (original) priority
+    
+    LIST_ENTRY          AcquiredMutexesList; // the list of mutexes held by thread
+    PMUTEX              WaitedMutex;     // the mutex thread waits for
+    
+    ...
+}
+\end{lstlisting}
+
+In file \lstinline|mutex.h|:
+
+\begin{lstlisting}
+struct _MUTEX
+    ...
+    LIST_ENTRY      AcquiredMutexListElem; // elem in list of mutexes acquired by a thread
+    ...
+} MUTEX, *PMUTEX;
+\end{lstlisting}
+
+Functions that must be changed (in \lstinline|mutex.c| and \lstinline|thread.c|) are:
+\begin{itemize}
+    \item \lstinline|MutexAcquire()|: donate priority of blocking thread (in case the mutex in already acquired), if its priority is higher than that of mutex holder;
+    
+    \item \lstinline|MutexRelease()|: recompute the priority of the thread releasing the mutex;
+    
+    \item \lstinline|ThreadSetPriority()|: take into account both real priority, which is changed by the functions, and the current effective (donated) one;
+    
+    \item \lstinline|ThreadGetPriority()|: assure the actual (i.e. effective, donated, if the case) priority is the one returned;
+\end{itemize}
+
+New functions that we will implement (in \lstinline|thread.c|) are:
+\begin{itemize}
+    \item \lstinline|ThreadDonatePriority()|: called in \lstinline|MutexAcquire()| to donate priority to a mutex holder and also deal with the nested donation aspect;
+    
+    \item \lstinline|ThreadRecomputePriority()|: called in \lstinline|MutexRelease()| to recompute the priority of a thread just releasing a mutex, taking into account its real priority, but also priorities donated due to other mutexes that thread still holds.
+\end{itemize}
+
+
+\subsubsection{Advanced Scheduler (MLFQ). Dynamic-Priority Scheduler}
+\label{subsubsec:mlfq-data-structures}
+
+To be determined by students. Read the given documentation, while all the needed details are described there.
+
+% -------------------------------------------------- %
+\subsection{Interfaces Between Components}
+
+To be determined by students.
+
+% -------------------------------------------------- %
+\subsection{Analysis and Detailed Functionality}
+
+\subsubsection{Timer}
+
+Replacing the busy-waiting requires a mechanism to block a thread until the waited event (i.e. a particular time moment) occurs. We immediately noted the function \lstinline|ThreadBlock()| (in file \lstinline|thread.c|) provides such a functionality. We took a look of places \lstinline|ThreadBlock()| was already used, to see the way the blocking mechanism is used. One good example was in function \lstinline|MutexAcquire()|, where we noted that before blocking the current thread (i.e. the one waiting for the mutex), it was inserted in a waiting list, associated to that mutex. We also noted that the blocked thread was unblocked in function \lstinline|MutexRelease()|, by calling the function \lstinline|ThreadUnblock()| on the blocked thread removed from the waiting list. So, our first idea was to create a similar list for each timer instance, where to keep threads waiting for that timer to expire, using \lstinline|ThreadBlock()| function to block a thread and \lstinline|ThreadUnblock()| to unblock it.
+
+However, we noted that the \lstinline|ThreadBlock()| function was called in function \lstinline|ExEventWaitForSignal()| also. Investigating a little further, we noted that the executive event was a general wait to manage threads waiting for a particular (not specified, so general) event, by blocking the waiting threads and unblocking them when the event occurred (i.e. signaled). This seemed to be a higher level interface to the block / unblock mechanism, so we decided to use it. 
+
+As a result, we decided to associate an executive event to each timer. This translates in an additional \lstinline|EX_EVENT| field in the \lstinline|_EX_TIMER| structure, like illustrated in Section~\ref{subsubsec:timer-data-structures}. 
+
+Once we had established the \lstinline|TimerEvent| field, we had to determine three aspects related its usage:
+\begin{enumerate}
+    \item when and how to initialize it;
+    
+    \item where and how to use it to block a thread waiting for the timer to expire;
+    
+    \item where and how to use it to unblock the waiting threads, when the timer expires.
+\end{enumerate}
+
+
+The decisions we took in these sense were the following ones:
+\begin{enumerate}
+    \item logically, we could (and must) initialize a timer's event, when that timer is initialized itself, i.e. in the function \lstinline|ExTimerInit()|; we could do it by calling the \lstinline|ExEventInit()| function, with the event type ``\lstinline|ExEventTypeNotification|'' and not signaled initially.
+    
+    \item replacing the busy-waited loop and blocking the waiting thread could be done very simple in function \lstinline|ExTimerWait()|, by simply calling the function \lstinline|ExEventWaitForSignal()| on the timer's event;
+    
+    \item unblocking the thread should be done very simple by calling the \lstinline|ExEventSignal()| function of the timer's event, though where to do this was not pretty obvious; in order to determine this, we looked in more details at the condition checked by the initial code in the busy waiting loop in function \lstinline|ExTimerWait()| and noted there were actually two conditions:
+        \begin{enumerate}
+            \item one (the second, actually) that checked in the timer was still started (checking the \lstinline|Timer->TimerStarted| field); this immediately lead us to the conclusion that one place to call \lstinline|ExEventSignal()| was the function \lstinline|ExTimerStop()|, where the \lstinline|TimerStarted| field was set to FALSE; 
+            
+            \item another one that checked if the system time (returned by function \lstinline|IomuGetSystemTimeUs()|) had reached a value equal to or bigger than the timer's triggering time; this suggested us that the other place the \lstinline|ExEventSignal()| should be called was where the time passage could be observed; investigating in this direction, we found out that this was related to the timer interrupt occurrence and also that the function \lstinline|ExSystemTimerTick()| (in file \lstinline|ex_system.c|) was called every time a timer interrupt occurred; so, we decided to have a function \lstinline|ExTimerCheck()| to be called from \lstinline|ExSystemTimerTick()|; the way that function works is described below.
+        \end{enumerate}
+
+\end{enumerate}
+
+The function \lstinline|ExTimerCheck()| must check if the system's time is bigger than or equal to a timer's triggering time and if the case, call the \lstinline|ExEventSignal()| on that timer's event. This looks like this:
+\begin{lstlisting}
+if (system_time >= timer_triggering_time)
+    call ExEventSignal() on timer event field
+\end{lstlisting}
+
+
+We also noted that the same checking must be done on all possible timers existing in the system, so we needed a way to keep track of all of them and to call their \lstinline|ExTimerCheck()| function. This is why we decided to keep a global list with all the timers in the system. We also decided to have a lock protecting that list for concurrent accesses (it would be possible for multiple threads running on different CPUs to concurrently create or remove different timers). We placed the list and its lock in a structure called \lstinline|struct _GLOBAL_TIMER_LIST| and created a global variable of that type, called \lstinline|m_globalTimerList|.
+
+As with any other global variable or data structure field we had to determine where to initialize it and its lock, where to use it (i.e. in our case add new timers or remove them) and where to destroy it. We took the following decisions in this context:
+\begin{enumerate}
+    \item create a new function \lstinline|ExTimerSystemPreinit()| to be called where other functions initializing OS's components are called, i.e. in function \lstinline|SystemPreinit()| (file \lstinline|system.c|); this function would simply initialize the global list of timers (by calling \lstinline|InitializeListHead()|) and the corresponding lock (by calling \lstinline|LockInit()|);
+    
+    \item adding a new timer in the list will be done in function \lstinline|ExTimerInit()|, by performing the following steps:
+        \begin{enumerate}
+            \item acquire the lock that protects the global list of timers (calling \lstinline|LockAcquire()|);
+            
+            \item insert the timer's structure in the global list of timers (by calling \lstinline|InsertOrderedList()|, for reason explained below);
+            
+            \item release the lock that protects the global list of timers (calling \lstinline|LockRelease()|).
+        \end{enumerate}
+
+    \item removing a timer from the global list will be done in function \lstinline|ExTimerUninit()|, by performing the following steps:
+        \begin{enumerate}
+            \item acquire the lock that protects the global list of timers (calling \lstinline|LockAcquire()|);
+            
+            \item remove the timer's structure in the global list of timers (calling \lstinline|RemoveEntryList()|);
+            
+            \item release the lock that protects the global list of timers (calling \lstinline|LockRelease()|).
+        \end{enumerate}
+        
+        
+    \item iterate the global list when a timer interrupt occurs (i.e. in function \lstinline|ExSystemTimerTick()|) and call the \lstinline|ExTimerCheck()| for each thread in the global list; actually, in order to keep the current coding style, we will declare the global list of timers as a static variable (so visible only in file \lstinline|ex_timer.c|) and a new function \lstinline|ExTimerCheckAll()| (declared \lstinline|ex_timer.h| and defined in \lstinline|ex_timer.c|) to be called from \lstinline|ExSystemTimerTick()| and performed the mentioned steps.
+        \begin{enumerate}
+            \item acquire the lock that protects the global list of timers (calling \lstinline|LockAcquire()|);
+            
+            \item iterate the global list of timers (e.g. by calling \lstinline|ForEachElementExecute()| or using any other way to iterate a list) and call the \lstinline|ExTimerCheck()| for each element in that list;
+            
+            \item release the lock of the global list of timers (calling \lstinline|LockRelease()|).
+        \end{enumerate}
+
+\end{enumerate}
+
+We discover an optimization we could apply when checking for timers' triggering time, in order to shorted the time spent handling the timer interrupt. We noted that only timers having their trigger time smaller than or equal to the system time must be signaled, so we decided to keep the global list of timers ordered (ascending) by timers' trigger time. This way, once a timer with its trigger time bigger than the system's time is encountered, the list iteration could be stopped. This is why we will call \lstinline|InsertOrderedList()| in  \lstinline|ExTimerInit|. That function expects as a parameter a function that know to compare two timers, which we decide to be a new function \lstinline|ExTimerCompareListElems()|. This function works as follows:
+\begin{enumerate}
+    \item obtains from its first two parameters, which are of the generic type \lstinline|PLIST_ENTRY|, two pointers to \lstinline|EX_TIMER| structure, using the \lstinline|CONTAINING_RECORD| macro;
+    
+    \item compare the two timers by calling the function \lstinline|ExTimerCompareTimers()|.
+\end{enumerate}
+
+Take care that using the \lstinline|ForEachElementExecute()| function to iterate the global list of timers could traverse the entire list, even if that list is ordered, so making your optiomization ineffective. Though, we could change this behaviour setting correspondigly the forth parameter (\lstinline|AlMustSucceed|) of \lstinline|ForEachElementExecute()| function and by carrefully implementing the \lstinline|ExTimerCompareTimer()| function. Take a look at the implementation of function \lstinline|ForEachElementExecute()| to see exactly how its forth parameter must be specify and how the \lstinline|ExTimerCompareTimer()| function must be implemented. 
+
+\subsubsection{Priority Scheduler. Fixed Priority Scheduler}
+
+The priority-based scheduler's policy requires that at any moment the highest priority threads (from the ones wanting for the CPU, i.e. the so-called ready threads) to be running. This rule implies two requirements we must deal: 
+\begin{enumerate}
+    \item when there are more threads we must choose from, the one with the highest priority must be chosen;
+    
+    \item an unblocked or a newly created thread with a higher priority than any other running thread must preempt a smaller priority thread and be given the released CPU.
+\end{enumerate}
+
+In order to satisfy the first requirement, we decided to order all thread lists in the system, based on their priorities, in the descendant order, such that to always have the thread with the highest priority in front of the list. We had identified all such lists, which are:
+\begin{enumerate}
+    \item the ready list (see field \lstinline|ReadyThreadsList| of structure \lstinline|_THREAD_SYSTEM_DATA|, file \lstinline|thread.c|);
+    
+    \item mutexes' lists (see field \lstinline|WaitingList| of structure \lstinline|_MUTEX|, file \lstinline|mutex.h|);
+    
+    \item events' lists (see field \lstinline|WaitingList| of structure \lstinline|_EX_EVENT|, file \lstinline|ex_event.h|).
+\end{enumerate}
+
+For keeping the thread lists ordered, we will replace the usage of \lstinline|InsertTailList()| with the function \lstinline|InsertOrderedList()|, which will be given as parameter a thread comparison function \lstinline|ThreadComparePriorityReadyList()| (described below), in the following functions:
+\begin{itemize}
+    \item in \lstinline|ThreadUnblock()| for inserting the unblocked thread in \lstinline|ReadyThreadsList| ordered descending by priority;
+    
+    \item in \lstinline|ThreadYield()| for inserting the yielding thread (i.e. the one giving up the CPU) in \lstinline|ReadyThreadsList| ordered descending by priority;
+    
+    \item in \lstinline|MutexAcquire()| for inserting the blocking thread (i.e. the one waiting for the mutex) in \lstinline|WaitingList| ordered descending by priority;
+    
+    \item in \lstinline|ExEventWaitForSignal()| for inserting the blocking thread (i.e. the one waiting for the event occurrence) in \lstinline|WaitingList| ordered descending by priority.
+\end{itemize}
+
+The \lstinline|ThreadComparePriorityReadyList()| function works the following way:
+\begin{itemize}
+    \item obtains from its first parameter \lstinline|e1|, which is of the generic type \lstinline|PLIST_ENTRY|, a pointer to a \lstinline|_THREAD| structure, using the \lstinline|CONTAINING_RECORD| macro, whose the first parameter is the list element, the second is the \lstinline|THREAD| structure containing that  list element, and the third is the name of the list element field in the THREAD structure, which is the ``\lstinline|ReadyList|'':
+    \begin{lstlisting}
+PTHREAD pTh1;    
+pTh1 = CONTAINING_RECORD(e1, THREAD, ReadyList);
+    \end{lstlisting}
+
+    \item similarly, obtains from its second parameter \lstinline|e2| a pointer to a \lstinline|_THREAD| structure:
+    \begin{lstlisting}
+PTHREAD pTh2;    
+pTh1 = CONTAINING_RECORD(e2, THREAD, ReadyList);
+    \end{lstlisting}
+    
+    \item compare the two threads' priorities and return the result such that to order the list in a descendant way (i.e. negative, if second thread's priority is less the that of the first, positive if the opposite, and zero if equal):
+    \begin{lstlisting}
+prio2 = ThreadGetPriority(pTh2);
+prio1 = ThreadGetPriority(pTh1);
+
+compare_and_return_result(prio1, prio2);
+    \end{lstlisting}
+\end{itemize}
+
+Having the ready list ordered by thread priority implied no need to change the \lstinline|_ThreadGetReadyThread()| function, which chooses a thread from ready list to be given an available CPU, while choosing the first thread in ready list (by calling \lstinline|RemoveHeadList()|) would return the thread with the highest priority, exactly what the priority-based policy requires. 
+
+Another aspect we should take care about when scheduling threads based on their priorities (besides the rule of always choosing the thread with the highest priority from a thread list) is the case more threads have the same priority, in particular, the same highest priority. In such a case, a fair scheduler would give equal chances to all such threads. This could be provided by using the Round-Robin (RR) policy (the one already being implemented in \OSName{}), which would take the threads in the order they were added to the ready list and will give them CPUs for an established amount of time (time quantum or slice), placing them back in ready list when their allocated time slice expires. The RR strategy must manage the ready list in a FIFO manner, i.e. appending at the end of the list a thread suspended due to its time quantum expiration. This could be managed on our priority-ordered ready list, if the \lstinline|InsertOrderedList()| function would insert a thread with a particular priority after all threads with the same priority already in ready list (i.e. at the end of its priority class), while doing so it would be the equivalent of appending to a list containing only threads of that priority. We looked at the implementation of \lstinline|InsertOrderedList()| and noted that it complied these requirements based on the given comparison function (see above), which means that our scheduler would handle threads with the same priority based on the RR policy. 
+
+In order to satisfy the preemption requirement, we searched for situations (and corresponding functions) when a thread becomes a new competitor for CPUs, besides the existing one. The threads competing for CPUs are the running threads and the threads in the ready list, having the running threads with a higher priority than all those in ready list. However, a newly arrived thread could have a higher priority than some of those running at that moment and this is why our scheduler should be called to preempt one of the running threads if having a smaller priority than the newly arrived one, or inserting the new thread in the ready list, in the opposite case. 
+
+We identified such situation for:
+\begin{enumerate}
+    \item a newly created thread (see function \lstinline|ThreadCreate()|, which further calls \lstinline|ThreadCreateEx()|);
+    
+    \item an unblocked thread (see function \lstinline|ThreadUnblock()|).
+\end{enumerate}
+
+However, when we looked in more details at function \lstinline|ThreadCreateEx()|, we noted that a newly create thread is set active (i.e. ready) by calling the \lstinline|ThreadUnblock()| function, which simply inserts that thread in the ready list. This is similar to unblocking any other thread when the condition it was waiting for is fulfilled (e.g. a mutex is released, an event is signaled --- see functions \lstinline|MutexRelease()| and \lstinline|ExEventSignal()|, where \lstinline|ThreadUnblock()| is called). So, we concluded that \lstinline|ThreadUnblock()| function is the only place we should impose the preemption functionality of our priority-based scheduler, based on the following additional logic:
+
+% This was a tentative for using the algorithm2e package, which did not work from some conflicts with other packages
+% \begin{algorithm}[H]
+% \SetAlgoLined
+% \KwResult{Preempt a smaller prioroty thread, if any}
+%   \eIf{unblocked_thread_priority > min_priority_running_threads}{
+%    preempt_one_smaller_prio_running_thread\;
+%    }
+%   insert_unblocked_thread_in_ready_list\;
+%  \caption{Preemption Algorithm in ThreasUblock() Function}
+% \end{algorithm}
+
+% Not looking so nice, but just to show you there are Latex pseudo-code packages
+\begin{algorithmic}
+\Require \texttt{unblocked\_thread}, \texttt{ready\_list}, \texttt{min\_priority\_running\_threads}
+\Ensure Preempt a running thread (on any CPU), if smaller than the unblocked one
+
+\State $new\_prio$ = \Call{ThreadGetPriority}{unblocked\_thread}
+\State $min\_prio$ = \Call{GetMinPriorityOfRunningThreads}{}
+
+\State \Call{InsertOrderedList}{ready\_list, unblocked\_thread}
+
+\If{$new\_prio > min\_prio$}
+  \State Preemption() \Comment Preempt one smaller-priority running thread
+\EndIf
+\end{algorithmic}
+
+A CPU preemption could be implemented by using the \lstinline|SmpSendGenericIpi()| function to send an interrupt (i.e. IPI) to all CPUs. This way the CPUs will interrupt their execution and switch to other threads in the ready list, if they have a higher priority than the currently running threads. 
+
+Sending an IPI to all CPUs could be done the following way:
+\begin{lstlisting}
+SMP_DESTINATION dest = { 0 };
+
+SmpSendGenericIpiEx(ThreadYieldForIpi, NULL, NULL, NULL, 
+     FALSE, SmpIpiSendToAllIncludingSelf, dest);    
+\end{lstlisting}
+
+
+The function \lstinline|ThreadYieldForIpi()| given as the first argument would be executed by each CPU when handling the received IPI and should check the condition mentioned before, taking required actions. We could immediately note that the function \lstinline|ThreadYield()| provides exactly this kind of functionality. Besides, it protects the ready list with a lock while investigating it, a condition which is really needed to avoid multiple CPUs taking the same threads for being run. 
+
+Yet, we have a problem with calling \lstinline|ThreadYield()| when handling an IPI. \lstinline|ThreadYield()| switches the CPU from current thread to another one, but it is not recommended to do something like this when an interrupt is handled. Doing so, the interrupt remains only partially handled and this could affect the next interrupts (remaining masked or being delayed indefinitely). Though, there is a solution to this problem, which is used in \lstinline|ThreadTick()|. Function \lstinline|ThreadTick()| is called from \lstinline|ExSystemTimerTick()| when handling the timer interrupt and has the role of increasing different time-related counters and checking if the currently running thread has not yet consumed entirely its allocated CPU time. If it is the case, the current thread must be suspended and CPU switched to another thread. Here is where the functionality of \lstinline|ThreadYield()| is also needed. But, instead of directly calling \lstinline|ThreadYield()|, we can note that it is only the flag \lstinline|pCpu->ThreadData.YieldOnInterruptReturn| that is set to TRUE. Doing that, has the same effect, i.e. calling \lstinline|ThreadYield()|, but only at the appropriate moment, after the interrupt handling is finished, just before returning to the interrupted thread. This happens in function \lstinline|_IsrInterruptHandler()|, where the \lstinline|YieldOnInterruptReturn| flag is checked (by calling \lstinline|ThreadYieldOnInterrupt()|) and if set, \lstinline|ThreadYield()| is called. In conclusion, instead of directly calling \lstinline|ThreadYield()| in our \lstinline|ThreadYieldForIpi()| function, we should set the flag \lstinline|YieldOnInterruptReturn| of the current CPU.
+
+Another aspect we should manage is the way to find out if preemption is needed or not when a thread is unblocked, even in case of concurrent CPUs. This means that while comparing the unblocked thread's priority to those of the currently running threads, we must be sure the investigated CPUs will not be switched to other threads. We found out two ways to manage correctly this concurrency:
+\begin{enumerate}
+    \item always send an IPI to all CPUs, letting them call \lstinline|ThreadYield()|, whose concurrent execution is synchronized by a lock (as mentioned before); this is the simplest way, though not the most efficient one, as all CPUs will be interrupted, even if the unblocked thread is smaller than all currently running ones, so must not preempt any one of them;
+    
+    \item keep a protected list of all running threads or just a global variable having the value of the minimum priority of all running threads; the access to that variable must also be protected by a lock.
+\end{enumerate}
+
+We chose the first alternative, being more simple, which means we have no checking anymore in the algorithm of \lstinline|ThreadUnblock()| described above, but just trigger the preemption mechanism by calling \lstinline|SmpSendGenericIpi()|.
+
+After further investigations, we found out that even if our priority-based scheduler does not change the priority of threads, letting them as established at thread creation (supposed to be controlled by user applications those threads belong to), there is still another place, where a thread priority could be changed. This is in function \lstinline|ThreadSetPriority()|, which could be called only by a running thread to change its own priority. In such a case, the scheduler must also be called to take into account the changed priority. We identified two situations:
+\begin{enumerate}
+    \item if the thread calling \lstinline|ThreadSetPriority()| increased its priority, this would not change the current scheduling configuration, while it is supposes that the thread's previous priority had already been higher than those of all threads in ready list, so increasing it even more, produces no effects;
+    
+    \item if the thread calling \lstinline|ThreadSetPriority()| decreased its priority, there could be two subcases:
+        \begin{enumerate}
+            \item if the new priority is higher than those of all threads in the ready list, noting should happen, while this is equivalent to the previous case;
+            
+            \item if the new priority is smaller than that of any thread in the ready list, then the currently running thread must give up the CPU in favor of a higher-priority thread in the ready list; this could be done very simple by calling \lstinline|ThreadYield()| function.
+        \end{enumerate}
+
+\end{enumerate}
+
+
+\subsubsection{Priority Scheduler. Priority Donation}
+\label{subsubsec:prio-donation-analysis-and-design}
+
+As mentioned in Section~\ref{subsubsec:prio-donation-data-structures}, we firstly established the need for two types of priorities associated to a thread: real and effective. 
+
+Ignoring the priority donation problem, the real priority is the one established at thread creation (in function \lstinline|ThreadCreateEx()|) or when the thread itself changes its priority (in function \lstinline|ThreadSetPriority()|). Correspondingly, we assign values to the real priority field \lstinline|RealPriority| in function \lstinline|_ThreadInit()| (called by \lstinline|ThreadCreateEx|) and in function \lstinline|ThreadSetPriority()|. Those values correspond to the functions' priority parameter and, if no priority donation takes place for a thread, are equal to the effective priority field \lstinline|Priority|.
+
+Though, while we must solve the \textit{priority inversion} problem based on priority donation, we could have at one moment different values for the two priorities and must handle differently them. The priority the scheduler must consider when taking its decisions must be the effective priority, i.e. the donated priority, if a priority is donated to it (logically, does not make sense to donate a higher priority to a thread, if that priority is not considered by scheduler). 
+
+The priority inversion problem is usually defined (see the lecture slides related to priority-based scheduling) in relation to mutexes. The main idea is that while holding a mutex, a lower-priority thread could be suspended (due to priority-based policy) by higher priority threads. This is not a problem until such a higher-priority thread also wants to take the mutex. Being already acquired, the higher-priority thread must wait, being blocked (so, ceasing the CPU) and giving the mutex holder a change to run again. However, if other threads with priorities between the two mentioned before are running, they keep from running both the lower thread (mutex holder) and, indirectly, the higher thread waiting for the mutex. This looks like the priority rule was switched, a higher one waiting for a smaller one, like if there priorities would have been switched (this is why the problem is called priority inversion). This could lead to critical problems, when critical high-priority threads could be delayed indefinitely by smaller priority threads, so a good OS (like ours) tries to solve it. One solution to this problem is the priority (temporal) donation technique, which consists in the blocking high-priority thread donating its priority the the smaller-priority mutex holder, in order to boost it such that no in-between thread be able to delay the high one. Obviously, the donated priority must be kept only while the mutex holder has the mutex. When the mutex is released the donated priority must be lost and the thread should be restored to its real one. If this were the only possible case, the implementation of priority donation solution would be very simple. This is not the case however, as we will see below. However, it is clear from the problem definition that we have to handle the two priorities of a thread in the following functions:
+\begin{enumerate}
+    \item \lstinline|MutexAcquire()|, where priority donation could happen, and
+    \item \lstinline|MutexRelease()|, where priority restoration must happen, if needed.
+\end{enumerate}
+
+Basically, in \lstinline|MutexAcquire()| we should do the following on the execution path corresponding to the mutex being held, when the current thread must be blocked:
+\begin{lstlisting}
+while (Mutex->Holder != pCurrentThread)    
+{
+    crtThPrio = ThreadGetPriority(pCurrentThread);
+    holderPrio = ThreadGetPriority(Mutex->Holder);
+
+    if (crtPrio > HolderPrio)
+    {
+       // priority donation
+       Mutex->Holder->Priority = crtThPrio;
+    }
+}
+\end{lstlisting}
+
+Similarly, in \lstinline|MutexRelease()| we must restore the priority of mutex holder to its original value:
+\begin{lstlisting}
+if (Mutex->Holder->Priority != Mutex->Holder->RealPriority)
+{
+    Mutex->Holder->Priority = Mutex->Holder->RealPriority;
+}
+\end{lstlisting}
+
+In practice it is not so simple, though, because a thread could hold simultaneously multiple mutexes. In that case it could be donated multiple priorities (so, its effective priority being boosted multiple times), due to the multiple mutexes it held. In such a case, it would not be right to restore that thread's priority to its real one when releasing one of its acquired mutexes, as it could still held other ones. The correct solution should take into account both the thread's real priority and the ones donated due the mutexes still being held by that thread. The formula would be something like:
+$max(real\_priority, max(donated_priorities))$
+
+The reason the real priority should be considered is that the thread could change its real priority to a higher value, after being donated a priority due to a mutex is held. 
+
+There are different strategies to keep track of donated priorities, but the one we considered is to maintain for each thread a list of the mutexes it holds. Noting that each mutex is associated a waiting list, i.e. a list of all thread waiting for that mutex, it is very simple to see which such threads have a greater priority than the mutex holder, and consider such a priority as a donation. This is the reason we defined the field \lstinline|AcquiredMutexesList| for each thread. As with any variable, let us see how it is initialized and used:
+\begin{enumerate}
+    \item \lstinline|AcquiredMutexesList| initialization should be done at thread creation and we chose to do it in \lstinline|_ThreadInit|;
+    
+    \item \label{item:insert-a-mutex} inserting an element (i.e. a mutex) in that list must be done when a mutex is acquired by the thread, i.e in function \lstinline|MutexAcquire()| on the execution path corresponding the the mutex being acquired (after the while loop, waiting for the mutex to become available);
+    
+    \item \label{item:remove-mutex}removing an element (i.e. a mutex) from that list must be done when a mutex is no longer held by a thread, so in function \lstinline|MutexRelease()|. 
+\end{enumerate}
+
+Because we must add \lstinline|MUTEX| structures to the \lstinline|AcquiredMutexesList|, we need to add a \lstinline|LIST_ENTRY| field in that structures, which we name \lstinline|AcquiredMutexListElem|. Using this field, steps \ref{item:insert-a-mutex} and \ref{item:remove-mutex} described above could be done like this: \lstinline|InsertTailList(GetCurrentThread()->AcquiredMutexList, &Mutex->AcuiredMutexListElem);| for the former and \lstinline|RemoveEntryList(&Mutex->AcuiredMutexListElem)| for the later. Take a look of the implementation of \lstinline|InsertTailList()| and \lstinline|RemoveEntryList()| functions to understand their functionality and required parameters. 
+
+The next logical step we must establish is the more complex way a thread's priority is recomputed, when that thread releases one of its held mutexes. So the very simple algorithm described above in function \lstinline|MutexRelease()| was replaced by another one that we will place in function \lstinline|ThreadRecomputePriority()|, which basically performs the following steps:
+\begin{enumerate}
+    \item initialize a current maximum value to the thread's real priority;
+    \item iterate the \lstinline|AcquiredMutexesList| of the thread;
+    \item \label{item:iterate-mutex-list} for each mutex, iterate its waiting list;
+    \item for each waiting thread in that list, compares its effective priority to the current maximum, and if bigger, updates the maximum to the new value;
+    \item set the thread's effective priority \lstinline|Priority| to the maximum value found.
+\end{enumerate}
+
+We will always use the \lstinline|ThreadGetPriority()| function to correctly get the thread's effective priority. Take care that while iterating a mutex's waiting list in Step~\ref{item:iterate-mutex-list} above, that list could be concurrently changed by a thread waiting for the corresponding mutex, so entering the waiting list of that mutex. In ordor to avoid race conditions, we must take the lock of the mutex while iterating through its waiting list. 
+
+
+Another problem described in relation to priority inversion is the case a thread holding a mutex is waited by a higher priority thread (which, as established, donates its priority to the mutex holder), but the waiting thread is in its turn the holder of another mutex, which could be later on waited by an even higher-priority thread. The latter thread, would donate its priority to the second we mentioned, but if this donation would not go even further to the first (smallest) thread, the donation would not be effective. This is what lead to the nested priority requirements. However, in order to be able to manage it, we need to know for each thread, when being donated a priority (due to holding a mutex), if that thread is not waiting in its turn after another thread (holding another mutex, in its turn). In order to manage this, we decided to add a new field \lstinline|WaitedMutex| in the \lstinline|THREAD| structure, to keep a pointer to a mutex that is waited for by the thread. In case there is no such waited mutex, the pointer would be NULL. We must note that there is no need, in this case for a list of waited mutexes, while, the thread being a single, sequential execution, there is no way to wait for multiple mutexes in the same time (i.e. while being block waiting for a mutex, no execution of that thread take place, such that to be able to attempt taking another mutex). 
+
+The initialization to NULL of the field \lstinline|WaitedMutex| will be done in \lstinline|_ThreadInit()|, while a valid value (i.e. a pointer to a real mutex) will be done when a thread is going to be blocked, waiting for an already acquired mutex, which is in function \lstinline|MutexAcquire()|, just before calling \lstinline|ThreadBlock()|.
+
+The usage of the \lstinline|WaitedMutex| must be done in \lstinline|MutexAcquire()| also, when a thread is going to be blocked, but in relation to the priority donation for the mutex's holder. We want to place the priority donation algorithm in a function called \lstinline|ThreadDonatePriority()|, which will perform the following steps:
+\begin{enumerate}
+    \item compare the donor's priority with the mutex holder's one, and if the former's in greater, performs the donation, i.e. assigns the mutex holder's effective priority to that of the donor's effective priority;
+    \begin{lstlisting}
+donor = GetCurrentThread();
+if (ThreadGetPriority(donor) > ThreadGetPriority(MutexHolder))
+{
+  MutexHolder->Priority = donor->Priority;
+}
+    \end{lstlisting}
+
+    \item if the mutex holder is in its turn waiting for another mutex, the donation must go further, like
+\begin{lstlisting}
+    MutexHolder->WaitedMutex->Holder->Priority = MutexHolder->Priority;
+\end{lstlisting}
+
+    \item the same nested mechanism must be repeated until the end of the waiting chain, i.e. until a thread waiting for no mutex.
+\end{enumerate}
+
+Finally, when a thread succeeds acquiring a mutex it waited for previosly, its \lstinline|WaitedMutex| must be set to NULL again. This must be done on the execution path corresponding the the mutex being acquired (after the while loop, waiting for the mutex to become available).
+
+Another problem we have to deal with in relation to priority inversion is about a thread changing its own real priority, in function \lstinline|ThreadSetPriority()|. It is possible for a thread to increase its priority to a value higher than its currently donated priority (i.e. its effective priority), in which case, obviously, the effective priority must be given the same value like the current real one. A very simple way (though, not so efficient) to compute the thread's new effective priority would be to call the function \lstinline|ThreadRecomputePriority()|.
+
+Looking at our strategy to deal with priority donation, we could note that our decision to change at one moment a mutex holder's effective priority could interfere with another decision (and strategy) taken by the priority-based scheduler, namely to keep thread lists ordered based on threads' effective priorities. This is because the thread whose effective priority is changed could be in an ordered thread list and our change could break that order, making later scheduler's decisions incorrect. So, we should consider keeping ordered the list a thread is in when its priority is changed. This could be easily done by reordering such a list after changing the priority of the thread, e.g. by removing the thread from the list and inserting it back in its new position. 
+
+One challenge we face is to know the list a thread is in. A thread could be running, if its state is \lstinline|ThreadStateRunning|, in the ready list, if its state is \lstinline|ThreadStateReady| or in a waiting list, if its state is \lstinline|ThreadStateBlocked|. In the first case, the thread is in no list. In the second, it is in the unique global ready list. In the third case, however, we cannot know by default which waiting list a thread is in, because there could be many such lists (e.g. each mutex / event has its own waiting list) and the current code keeps no information about this. Yet, it would not be difficult to add such a field to the \lstinline|THREAD| structure and update it correspondingly when a thread is inserted in a waiting list or removed from it. 
+
+If the donated thread is running, we must do nothing else, while increasing the priority of an already running thread does not change its position relative to the threads in ready list, which had a smaller priority even before. 
+
+While changing the effective priority of a thread during the (nested) priority donation process, we can face race conditions, because there could be multiple donations taking place in the same time: for instance, multiple threads trying to get different mutexes, whose holders are all waiting for the same mutex, so there could be concurrent attempts to change the priority of that mutex holder. Also, if that thread wants to change its own priority, calling \lstinline|ThreadSetPriority()| function, there is an additional competing attempt to change that thread's effective priority. Because of race conditions like these, a thread's priority fields must be protected by a lock. We add for this the \lstinline|PriorityProtectionLock| lock.
+
+ 
+\subsubsection{Advanced Scheduler (MLFQ). Dynamic-Priority Scheduler}
+
+To be determined by students (for teams of four members). Read the given documentation, while all the needed details are described there.
+
+% -------------------------------------------------- %
+\subsection{Explanation of Your Design Decisions}
+
+\subsubsection{Timer}
+
+To be determined by students, if they have other alternatives or note some inconsistencies in the given design.
+
+\subsubsection{Priority Scheduler. Fixed Priority Scheduler}
+
+To be determined by students, if they have other alternatives or note some inconsistencies in the given design.
+
+\subsubsection{Priority Scheduler. Priority Donation}
+
+To be determined by students, if they have other alternatives or note some inconsistencies in the given design.
+
+\subsubsection{Advanced Scheduler (MLFQ). Dynamic-Priority Scheduler}
+
+To be determined by students, if they have other alternatives or note some inconsistencies in the given design.
+
+
+% ================================================================================= %
+\section{Tests}
+
+Your are given in your \OSName{} the tests your solution will be checked against and evaluated and you are not required to develop any addition test. Though, even if the tests are known, it would be helpful for you during the design phase to take a look at the given tests, because that way you can check if your design covers all of them. It would be sufficient for most of tests to just read the comments describing them.
+
+In this section you have to list the tests affecting your design and given a short description of each one (using you own words).
+
+\subsubsection{Timer}
+
+To be determined by students.
+
+\subsubsection{Priority Scheduler. Fixed Priority Scheduler}
+
+To be determined by students.
+
+\subsubsection{Priority Scheduler. Priority Donation}
+
+To be determined by students.
+
+\subsubsection{Advanced Scheduler (MLFQ). Dynamic-Priority Scheduler}
+
+To be determined by students.
+
+% ================================================================================= %
+\section{Observations}
+
+It was an interesting subject to work on. It required much time than I estimated. I learned that a good design is not a trivial thing to do and requires some time to be done.  
+
+
+% ================================================================================= %
+\section{Questions that you could be asked}
+
+This section must be removed. This is only to give you some hints for your design. 
+
+Some questions you have to answer (inspired from the original Pintos design templates), but these are not the only possible questions and we insist that your design should not be based exclusively to answering such questions:\begin{enumerate}
+    \item timer
+        \begin{itemize}
+            \item Briefly describe what happens in a call to \textit{ExTimerWait()}, including the effects of the timer interrupt handler.
+            \item What steps are taken to minimize the amount of time spent in the timer interrupt handler?
+            \item How are race conditions avoided when multiple threads call \textit{ExTimerWait()} simultaneously?
+            \item How are race conditions avoided when a timer interrupt occurs during a call to \textit{ExTimerWait()}?
+        \end{itemize}
+    
+    \item priority scheduler
+        \begin{itemize}
+            \item How do you ensure that the highest priority thread waiting for a mutex or executive event wakes up first?
+    
+            \item Describe the sequence of events when a call to \textit{MutexAcquire()} causes a priority donation.  How is nested donation handled?
+            
+            \item Describe the sequence of events when \textit{MutexRelease()} is called on a lock that a higher-priority thread is waiting for.
+            
+            \item Describe a potential race in \textit{ThreadSetPriority()} and explain how your implementation avoids it.  Can you use a lock to avoid this race?
+        \end{itemize}
+
+    \item advanced scheduler (MLFQ)
+        \begin{itemize}
+            \item Suppose threads A, B, and C have nice values 0, 1, and 2. Each has a \textit{recent\_cpu} value of 0.  Fill in the Table~\ref{tlb:mlfq-tracing}  (note: you can use \url{http://www.tablesgenerator.com/} to easily generate Latex tables) showing the scheduling decision and the priority and \textit{recent\_cpu} values for each thread after each given number of timer ticks:
+
+% Please add the following required packages to your document preamble:
+% \usepackage{multirow}
+\begin{table}[]
+\centering
+\caption{MLFQ Tracing Example}
+\label{tlb:mlfq-tracing}
+\begin{tabular}{|l|l|l|l|l|l|l|l|}
+\hline
+\multirow{2}{*}{timer ticks} & \multicolumn{3}{l|}{recent\_cpu} & \multicolumn{3}{l|}{priority} & \multirow{2}{*}{thread to run} \\ \cline{2-7}
+                             & A         & B         & C        & A        & B        & C       &                                \\ \hline
+0                            &           &           &          &          &          &         &                                \\ \hline
+4                            &           &           &          &          &          &         &                                \\ \hline
+8                            &           &           &          &          &          &         &                                \\ \hline
+12                           &           &           &          &          &          &         &                                \\ \hline
+16                           &           &           &          &          &          &         &                                \\ \hline
+20                           &           &           &          &          &          &         &                                \\ \hline
+24                           &           &           &          &          &          &         &                                \\ \hline
+28                           &           &           &          &          &          &         &                                \\ \hline
+32                           &           &           &          &          &          &         &                                \\ \hline
+36                           &           &           &          &          &          &         &                                \\ \hline
+\end{tabular}
+\end{table}
+
+
+            \item Did any ambiguities in the scheduler specification make values in the table uncertain?  If so, what rule did you use to resolve them?  Does this match the behavior of your scheduler?
+            
+            \item How is the way you divided the cost of scheduling between code inside and outside interrupt context likely to affect performance?
+
+        \end{itemize}
+
+    
+\end{enumerate}

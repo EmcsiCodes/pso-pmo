@@ -1,0 +1,169 @@
+
+\chapter{Design of Module \textit{virtualmemory}}
+
+\renewcommand{\taskA}{\textit{Per Process Quotas and Zero Pages}}
+\renewcommand{\taskB}{\textit{System Calls and Stack Growth}}
+\renewcommand{\taskC}{\textit{Swapping}}
+
+\section*{Notes}
+
+\textbf{The final design document delivered for each module must not exceed 2 pages per student and 7 pages in total.}
+
+% ============================= SECTION =============================
+\section{Module Overview and Requirements}
+
+Remove the following given official requirements and describe in few words (your own words) what you are requested to do in this part of your project. Even if this is something that we all know, it could be a good opportunity for you to be sure you really understand this aspect. 
+
+The requirements of the ``Virtual Memory'' assignment are the following:
+\begin{itemize}
+    \item \textit{Per Process Quotas}. You have to limit the number of open files a process can have
+and the number of physical frames it may use at one time.
+
+    \item \textit{Zero Pages}. You have to implement support for allocating virtual pages filled with
+zero bytes.
+
+    \item \textit{System calls}. You have to implement two new system calls for allocating and
+de-allocating virtual memory.
+
+		\item \textit{Stack Growth}. You have to add support for dynamically allocated stack.
+
+    \item \textit{Swapping}. You have to implement a page replacement algorithm (i.e. second chance)
+and swapping.
+
+		\item \textit{Shared Memory}. You have to add support for multiple processes to share the same memory region.
+
+\end{itemize}
+
+
+The way to allocate requirements on member teams. 
+\begin{itemize}
+    \item 3-members teams
+        \begin{enumerate}
+            \item Per Process Quotas + Zero Pages
+            \item System calls + Stack Growth
+            \item Swapping
+        \end{enumerate}
+\end{itemize}
+
+% \begin{itemize}
+%     \item 4-members teams
+%         \begin{enumerate}
+%             \item Per Process Quotas + Zero Pages
+%             \item System calls + Stack Growth
+%             \item Swapping
+%             \item Shared Memory
+%         \end{enumerate}
+% \end{itemize}
+
+% ============================= SECTION =============================
+\section{Design Details}
+
+% ------------------------- SUB-SECTION -------------------------
+\subsection{Design Description}
+
+\subsubsection{\taskA}
+
+\studentTodo{Complete the text for \taskA}
+
+\subsubsection{\taskB}
+
+\studentTodo{Complete the text for \taskB}
+
+\subsubsection{\taskC}
+
+\studentTodo{Complete the text for \taskC}
+
+% ------------------------- SUB-SECTION -------------------------
+\subsection{Interactions Between Components (Student Tasks)}
+
+\studentTodo{Complete the text as a team, defining a subsubsection for each interaction, or to note the lack of interactions}
+
+% ------------------------- SUB-SECTION -------------------------
+\subsection{Design Decisions, Motivations and Alternatives}
+
+\subsubsection{\taskA}
+
+\studentTodo{Complete the text for \taskA}
+
+\subsubsection{\taskB}
+
+\studentTodo{Complete the text for \taskB}
+
+\subsubsection{\taskC}
+
+\studentTodo{Complete the text for \taskC}
+
+
+% ============================= SECTION =============================
+\section{Implementation Considerations}
+
+\subsubsection{\taskA}
+
+\studentTodo{Complete the text for \taskA}
+
+\subsubsection{\taskB}
+
+\studentTodo{Complete the text for \taskB}
+
+\subsubsection{\taskC}
+
+\studentTodo{Complete the text for \taskC}
+
+% ================================================================================= %
+\section{Questions that you could be asked}
+
+This section must be removed. This is only to give you some hints for your design. 
+
+Some questions you have to answer (inspired from the original Pintos design templates), but these are not the only possible questions and we insist that your design should not be based exclusively to answering such questions:
+\begin{enumerate}
+    \item Process Quotas
+        \begin{itemize}
+            \item When sharing memory between processes the physical frames used should be counted in the quota for each process, how will you achieve this?
+        \end{itemize}
+				
+	  \item Zero Pages
+        \begin{itemize}
+            \item How will you implement zero pages? How will you support accessing a range of zero memory larger than the swap file? Explain the algorithm required for your implementation.
+        \end{itemize}			
+				
+		\item Stack Growth
+        \begin{itemize}
+            \item Explain your heuristic for deciding whether a page fault for an invalid virtual address should cause the stack to be extended into the page that faulted. 
+        \end{itemize}		
+
+    \item page table management
+        \begin{itemize}
+            \item In a few paragraphs, describe your code for locating the frame, if any, that contains the data of a given page.
+            
+            \item How does your code coordinate accessed and dirty bits between kernel and user virtual addresses that alias a single frame, or alternatively how do you avoid the issue?
+            
+            \item When two user processes both need a new frame at the same time, how are races avoided?
+        \end{itemize}
+    
+    \item page replacement and swapping
+        \begin{itemize}
+            \item When a frame is required but none is free, some frame must be evicted.  Describe your code for choosing a frame to evict.
+            
+            \item When a process P obtains a frame that was previously used by a process Q, how do you adjust the page table (and any other data structures) to reflect the frame Q no longer has?
+            
+            \item Explain the basics of your VM synchronization design. In particular, explain how it prevents deadlock. (Refer to the textbook for an explanation of the necessary conditions for deadlock.)
+            
+            \item A page fault in process P can cause another process Q's frame to be evicted. How do you ensure that Q cannot access or modify the page during the eviction process?  How do you avoid a race between P evicting Q's frame and Q faulting the page back in?
+            
+            \item Suppose a page fault in process P causes a page to be read from the file system or swap. How do you ensure that a second process Q cannot interfere by e.g. attempting to evict the frame while it is still being read in?
+            
+            \item Explain how you handle access to paged-out pages that occur during system calls.  Do you use page faults to bring in pages (as in user programs), or do you have a mechanism for "locking" frames into physical memory, or do you use some other design?  How do you gracefully handle attempted accesses to invalid virtual addresses?
+
+            \item  A single lock for the whole VM system would make synchronization easy, but limit parallelism.  On the other hand, using many locks complicates synchronization and raises the possibility for deadlock but allows for high parallelism.  Explain where your design falls along this continuum and why you chose to design it this way.
+        \end{itemize}
+				
+		\item Shared Memory
+        \begin{itemize}
+            \item What data do you need to maintain in order to be able to create and access shared memory regions? What data structure will you be using to maintain the keys?
+			
+						\item After creating a shared memory region, when it is accessed by the second process does the same virtual address need to be returned to the process? Motivate your answer.
+			
+						\item How will you know when to delete the shared memory region? Take this scenario as an example: a process creates a region and 7 other processes access it, i.e. they call \textit{SyscallVirtualAlloc} with the same key, how do you know when you need to delete the key from your list and implicitly the shared memory region? This region should be valid until the last process which 'opened' it 'closes' it, i.e. calls \textit{SyscallVirtualFree}.
+        \end{itemize}
+
+\end{enumerate}

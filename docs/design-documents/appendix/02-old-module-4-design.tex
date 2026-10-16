@@ -1,0 +1,125 @@
+
+\chapter{Design of Module \textit{Processor-Affinity and FS Cache}}
+
+
+% ================================================================================= %
+\section{Assignment Requirements}
+
+\subsection{Initial Functionality}
+
+Describe in few words (one phrase) what you are starting from in your project. Even if this is something that we all know, it could be a good opportunity for you to be sure you really understand this aspect.
+
+\subsection{Requirements}
+
+Remove the following given official requirements and describe in few words (your own words) what you are requested to do in this part of your project. Even if this is something that we all know, it could be a good opportunity for you to be sure you really understand this aspect. 
+
+The requirements of the ``Processor Affinity'' assignment are the following:
+\begin{enumerate}
+    \item \textit{On-Processor Ready Lists}. You must place ready threads in per-processor ready lists and change the thread scheduler to support scheduling threads from those lists. You must implement a kind of ``pull-based'' processor balancing, which means pulling (i.e. scheduling) threads on an idle processor from the ready list of another processor. Deciding which such a list to use could be based on a policy you decide, e.g. a random non-empty ready list, the ready lists with the maximum number of threads etc. You must deal with possible race conditions implied by your algorithm. You are not allowed to use a single global lock to synchronize concurrent instances of the scheduler running simultaneously on different CPUs anytime they try to choose a ready thread, especially when the ready list of one CPU is not empty. Centralized synchronization strategy (and maybe the usage of one lock) could be activated only when a general balancing of all ready lists is needed, if your scheduling policy decides so. 
+
+    \item \textit{Processor Affinity}. You should provide support for user processes to inform the OS about the processors one of their threads should (or must) be run on, a property named ``processor affinity''. A more detailed explanation of what processor affinity is could be found \href{https://docs.microsoft.com/en-us/windows-hardware/drivers/kernel/interrupt-affinity-and-priority#about-kaffinity}{here}.
+    
+        \begin{enumerate}
+
+            \item You must add an additional optional parameter of type QWORD to the thread creation system call, which will function as a processor-affinity bitmap. Bits with value 1 in the processor-affinity parameter indicate processors on which the thread could be run, while 0 values indicate processors on which the thread could not be run. The least significant bit (i.e .bit 0) correspond to the logical processor having the identifier 0, the second least significant bit (i.e. bit 1) to the logical processor with identifier 1 and so on. For example, if the processor-affinity parameter of one thread would be ``\texttt{0xFF}'' (i.e. ``\texttt{0b1111'1111}''), that thread could run on any of the first 8 processors. If the the processor-affinity parameter would be ``\texttt{0x06}'' (i.e. ``\texttt{0b00000110}'') it could be run only on processors with identifier 1 and 2. You could use for processor identification the \texttt{PCPU.LogicalApicId} field, associating it to a particular bit in the processor-affinity mask. We recommend you building a per-system processor mask at system initialization, based on the available number of processors and their \texttt{LogicalApicId}. For instance, if you run your OS on a system with just two logical processors having their \texttt{LogicalApicId} 1 and 4 respectively, you processor mask would be \texttt{0x05}. In such a case, if a thread affinity would be expressed as \texttt{0xFF} (i.e. all processors), you should filter out the unavailable processors, getting the effective affinity-mask \texttt{0x05}.     
+
+            \item Implement a system call ``ThreadSetProcessorAffinity'' to change the calling thread current affinity-mask to the value specified by the system call argument. For a detailed description of such a system call read \href{https://msdn.microsoft.com/en-us/library/windows/hardware/ff553271(v=vs.85).aspx}{this} document. When a thread's processor-affinity is changed, the scheduler should rescheduled that thread if it is currently running on a processor not included anymore in that thread's processor-affinity mask. 
+
+        \end{enumerate}
+    
+    \item \textit{File-System Cache}. Modify the provided \href{https://download.microsoft.com/download/1/6/1/161ba512-40e2-4cc9-843a-923143f3456c/fatgen103.doc}{FAT file system} to keep a cache of file blocks. When a request is made to read or write a block, check to see if it is in the cache, and if so, use the cached data without going to disk. Otherwise, fetch the block from disk into the cache, evicting an older entry if necessary. 
+    
+    You are limited to a cache no greater than 64 sectors in size. You must implement a cache replacement algorithm that is at least as good as the  ``clock'' (i.e. second-chance) algorithm. We encourage you to account for the generally greater value of metadata compared to data. Experiment to see what combination of accessed, dirty, and other information results in the best performance, as measured by the number of disk accesses. 
+    
+    You can keep a cached copy of the FAT table permanently in memory if you like. It doesn't have to count against the cache size. 
+    
+%     The provided inode code uses a ``bounce buffer'' allocated with malloc() to translate the disk's sector-by-sector interface into the system call interface's byte-by-byte interface. You should get rid of these bounce buffers. Instead, copy data into and out of sectors in the buffer cache directly.
+
+    Your cache should be \textit{write-behind}, that is, keep dirty blocks in the cache, instead of immediately writing modified data to disk. Write dirty blocks to disk whenever they are evicted. Because write-behind makes your file system more fragile in the face of crashes, in addition you should periodically write all dirty, cached blocks back to disk. The cache should also be written back to disk when the system halts.
+
+    You should also implement \textit{read-ahead}, that is, automatically fetch the next block of a file into the cache when one block of a file is read, in case that block is about to be read. Read-ahead is only really useful when done asynchronously. That means, if a process requests disk block 1 from the file, it should block until disk block 1 is read in, but once that read is complete, control should return to the process immediately. The read-ahead request for disk block 2 should be handled asynchronously, in the background.
+    
+\end{enumerate}
+
+
+% 'La creearea thread-ului va trebui sa adaugati un parametru aditional (sa zicem QWORD) pentru processor afinity (o explicatie mai detaliata gasiti aici https://msdn.microsoft.com/en-us/library/windows/hardware/ff551830(v=vs.85).aspx). Cum este explicat si-n documentatie acest tip de date ii defapt o masca de biti: in cazul nostru daca un thread va avea de exemplu afinitatea 0xFF (0b1111'1111) el va putea rula pe oricare din primele 8 procesoare, daca are afinitatea 0x6 (0b110) el va putea rula doar pe al 2-lea si al 3-lea procesor.
+% 
+% Va sfatuiesc, undeva la initializare, sa va construiti o masca cu toate procesoarele active din sistem: eu mai inainte am dat exemplu in care bitul reprezenta index-ul procesorului, dar ar fi mai curat sa faceti asta dupa id-ul procesorului, si anume va sfatuiesc sa folositi PCPU.LogicalApicId - asta va va face viata mai usoara cand o sa vreti sa trimiteti IPI-uri.
+% 
+% Asadar, pe unele sisteme s-ar putea sa aveti doar 2 procesoare, primul cu LogicalApidId 1, iar al 2-lea cu LogicalApidId 4, asadar masca voastra de procesoare active ar fi 0x5. Dupa care, cand se creeaza un thread cu afinitatea 0xFF voi sa mascati cu masca voastra activa si sa obtineti 0x5 (validati prin ASSERT-uri - ca suntem in kernel si-i codul scris de noi - ca nu va cere nimeni sa creeati un thread care sa n-aiba afinitatea setata pe vreun procesor activ).
+% 
+% De-asemenea, implementati si-o functie explicita de-a schimba afinitatea unui thread, similara cu cea de aici: https://msdn.microsoft.com/en-us/library/windows/hardware/ff553271(v=vs.85).aspx , in sensul ca prin apel thread-ul curent isi poate schimba afinitatea si instant va fi mutat pe unul din procesoarele care matchuiesc afinitatea noua (daca ruleaza deja pe un procesor cu afinitatea specificata nu trebuie facut nimic).
+% 
+% Va sfatuiesc ca prima oara sa implementati listele per procesor si sa va asigurati ca n-aveti probleme cu supra-incarcarea unui anumit procesor cu thread-uri si n-aveti procesoare idle in timp ce exista thread-uri ready to run. Acuma ca ma gandesc la dificultatile de aici, ma gandesc ca asta poate fi un subpunct separat: listele per procesor, al 2-lea subpunct: afinitatile per thread-uri, iar al 3-lea cred ca va fi legat de file system caching pana la urma. Voi vorbi maine cu dl Colesa sa vad ce zice si dansul de dificultatea problemelor si am sa va tin la curent.'
+% 
+% 'Am vorbit cu dl Colesa si mai avea dansul o idee: sa faceti un un mic benchmark intre cele doua metode de scheduling: cea existenta cu lista de scheduling globala si cea cu listele pe procesor (asta inainte de thread affinities). Asta nu tine de implementarea in sine ci asa mai mult pentru noi sa vedem care-i diferenta de performanta la scheduling.
+% 
+% Eu zic ca puteti sa lasati sa ruleze toate testele de la modulul de threads (fara sa ne intereseze rezultatul lor) si sa faceti benchmark la scheduler pentru acest workload. Ideea e sa masuram doar timpul efectiv petrecut in scheduler, nu durata executiei testelor.
+% 
+% De-asemenea as vrea sa avem si-o mica parte de 'design'. Nimic formal, cum va e voua mai convenabil: ori sa veniti la birou si sa povestim 20-30 minute despre cum aveti de gand sa faceti implementarea ori sa-mi scrieti cateva randuri pe mail. Asta e mai mult sa ma asigur ca ati inteles toate cerintele si nu va scapa nimica la implementare.'
+% 
+% 'O mica sugestie: decat sa parcurgeti de fiecare data lista de procesoare (si sa luati un lacat) eu sugerez sa tineti o variabila actualizata tot timpul cu perechea (PCPU, NoOfReadyThreadsInList) pentru procesorul cu cele mai putine ready thread-uri. Puteti folosi InterlockedCompareExchange128 https://msdn.microsoft.com/en-us/library/windows/desktop/hh972640(v=vs.85).aspx pentru asta (puteti in prima instanta sa faceti cu lock-uri daca nu va simtit comod cu functia asta, dar eu zic sa treceti la ea).
+% 
+% La cazul 1.3 trebuie sa mai tratati cazul daca procesorul la care inserati thread-ul descheduled ruleaza IdleThread-ul pe moment sau nu. Daca ruleaza idle thread-ul nu vrem sa asteptam pana la urmatorul scheduler tick ca acel procesor sa ia acel thread pentru executie (va trebui sa-i trimiteti un IPI - SmpSendGenericIpiEx). Acest lucru se aplica si in cazul 2.'
+
+
+The way to allocate requirements on member teams. 
+\begin{itemize}
+    \item 3-members teams
+        \begin{enumerate}
+            \item Per-Processor Ready Lists
+            \item Processor Affinity
+            \item File-System Cache
+        \end{enumerate}
+\end{itemize}
+
+
+
+
+
+\subsection{Basic Use Cases}
+
+Try to describe a real-life situation, where the requested OS functionality could be useful in a user-application or for a human being. This is also an opportunity for you to better understand what the requirements are and what are they good for. A simple use-case could be enough, if you cannot find more or do not have enough time to describe them.
+
+
+% ================================================================================= %
+\section{Design Description}
+
+\subsection{Needed Data Structures and Functions}
+
+This should be an overview of needed data structure and functions you have to use or add for satisfying the requirements. How the mentioned data structures and functions would be used, must be described in the next subsection ``Detailed Functionality''.
+
+
+\subsection{Interfaces Between Components}
+
+In this section you must describe the identified interference of your component(s) with the other components (existing or developed by you) in the project. You do not have to get in many details (which go into the next section), but must specify the possible inter-component interactions and specify the existing functions you must use or existing functions you propose for handling such interactions. 
+
+
+\subsection{Analysis and Detailed Functionality}
+
+Here is where you must describe detailed of your design strategy, like the way the mentioned data structures are used, the way the mentioned functions are implemented and the implied algorithms. 
+
+This must be the main and the most consistent part of your design document.
+
+It very important to have a coherent and clear story (text) here, yet do not forget to put it, when the case in a technical form. So, for instance, when you want to describe an algorithm or the steps a function must take, it would be of real help for your design reader (understand your teacher) to see it as a pseudo-code (see an example below) or at least as an enumerated list. This way, could be easier to see the implied steps and their order, so to better understand your proposed solution.
+
+
+\subsection{Explanation of Your Design Decisions}
+
+This section is needed, only if you feel extra explanations could be useful in relation to your designed solution. For instance, if you had more alternative, but you chose one of them (which you described in the previous sections), here is where you can explain the reasons of your choice (which could be performance, algorithm complexity, time restrictions or simply your personal preference for the chosen solution). Though, try to keep it short. 
+
+If you had no extra explanation, this section could be omitted at all. 
+
+% ================================================================================= %
+\section{Tests}
+
+Your are given in your \OSName{} the tests your solution will be checked against and evaluated and you are not required to develop any addition test. Though, even if the tests are known, it would be helpful for you during the design phase to take a look at the given tests, because that way you can check if your design covers all of them. It would be sufficient for most of tests to just read the comments describing them.
+
+In this section you have to list the tests affecting your design and given a short description of each one (using you own words).
+
+
+% ================================================================================= %
+\section{Observations}
+
+This section is also optional and it is here where you can give your teacher a feedback regarding your design activity.
+

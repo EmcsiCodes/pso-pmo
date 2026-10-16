@@ -1,0 +1,185 @@
+\chapter{Required Template for the Design of Each Project's Module}
+
+\newcommand{\taskA}{\textit{Task A}}
+\newcommand{\taskB}{\textit{Task B}}
+\newcommand{\taskC}{\textit{Task C}}
+
+\section*{Notes}
+
+\textbf{The final design document delivered for each module must not exceed 2 pages per student task and 7 pages in total.}
+
+\textbf{The examples given in each section/subsection are not complete/exhaustive!}
+
+% ============================= SECTION =============================
+\section{Module Overview and Requirements}
+
+This section will contain the requirements for each module. Read it carefully and don't change it or remove it.
+
+% ============================= SECTION =============================
+\section{Design Details}
+
+% ------------------------- SUB-SECTION -------------------------
+\subsection{Design Description}
+
+Here you should describe the design of your solution. This should be the main and most substantial part of the document.
+
+The solution should be described in terms of the main data structures and the functions or interfaces you will introduce or modify.
+
+\begin{itemize}
+    \item the key invariants (properties that must always be true) of your code and how they maintained;
+    \item how shared state is protected and concurrent operations are coordinated;
+    \item how and where resources are allocated, used, and released;
+    \item how errors and edge cases are handled.
+\end{itemize}
+
+Recommendations:
+\begin{itemize}
+    \item Use pseudocode to describe algorithms
+    \item Use diagrams to illustrate the architecture your solution
+    \item Don't list every minor helper function
+    \item Don't include existing declarations without explanation
+    \item Don't provide a line-by-line description of the implementation
+\end{itemize}
+
+\begin{tcolorbox}[title={Example}]
+\paragraph{Timer} We store a list of active timers, each with a list of waiting threads. The list of timers is checked periodically to see if any of them expired. When a timer expires, all waiting threads are released.
+
+To block the threads waiting for a timer, we use executive events, which allow blocking threads with \lstinline{ExEventWaitForSignal}.
+To unblock all waiting threads, we initialize the event as \lstinline{ExEventTypeNotification} and call \lstinline{ExEventSignal}.
+
+The events are initialized and uninitialized together with their timer, with the observation that they should be signaled before the timer is destroyed.
+
+\paragraph{Priority Scheduler. Fixed Priority Scheduler} We change how threads are inserted into the waiting lists, so they are ordered descending by priority,
+using \lstinline{InsertOrderedList}. To ensure that the highest priority threads are running at any given time,
+we will send an IPI (interprocessor interrupt) to invoke the scheduler on each CPU.
+Specifically, we need to do this when:
+\begin{itemize}
+    \item a thread is inserted into the global ready list, when a new thread is created or when a thread is unblocked from a timer, mutex or event.
+    \item the priority of threads changes, due to priority modifications or priority donation.
+\end{itemize}
+
+\paragraph{Priority Scheduler. Priority Donation} Priority donation will be structured like a tree with two kinds of nodes:
+\begin{itemize}
+    \item thread - each thread has a list of held mutexes
+    \item mutex - each mutex has a list of waiting threads
+\end{itemize}
+The mutex nodes only play an ``intermediary'' role, passing the priority of the threads waiting for the respective mutex
+to the holder of the mutex. This donation can happen recursively, with a chain like
+$Thread_A \xrightarrow{Waits} Mutex_1 \xrightarrow{Donates} Thread_B \xrightarrow{Waits} Mutex_2 \xrightarrow{Donates} Thread_C$,
+which must be handled by ``propagating'' the priority down to the running thread (in this case $Thread_C$).
+
+We also need to consider the cases when a thread holds multiple mutexes, choosing the highest priority of all donations, and when a mutex has multiple
+waiting threads, again, choosing the highest priority.
+\end{tcolorbox}
+
+\subsubsection{\taskA}
+
+\studentTodo{Complete the text for \taskA}
+
+\subsubsection{\taskB}
+
+\studentTodo{Complete the text for \taskB}
+
+\subsubsection{\taskC}
+
+\studentTodo{Complete the text for \taskC}
+
+% ------------------------- SUB-SECTION -------------------------
+\subsection{Interactions Between Components (Student Tasks)}
+
+Here you should describe each case where the code/logic for a given component (student task) depends on other components (student tasks).
+After you identify the interactions, we recommend defining an interface for each component, so the users
+of the given component (i.e. your teammates who implement the other tasks) don't need to know its internal details.
+
+Given that the implementation is in C, an interface will be a header file containing function headers and type definitions.
+Before starting the actual implementation work (i.e. modifying \texttt{.c} files), each team member should create or extend one
+or more (existing) header (\texttt{.h}) files, that expose the functions and types that will be used by their teammates
+when implementing the other modules.
+
+\begin{tcolorbox}[title={Example}]
+\paragraph{Timer} There is no direct interaction between the Timer and the Scheduler or Donation. There is an indirect interaction,
+because the timer makes use of executive events, which need to take into consideration thread priorities when releasing the waiting threads.
+
+\paragraph{Priority Scheduler and Priority Donation}
+The priority donation component depends on the scheduler, because it must be notified whenever thread priorities change.
+
+The priority scheduler should expose a function to the priority donation component, so the priority donation
+can ``notify'' the scheduler that a priority changed during donation and it may need to reschedule threads.
+\end{tcolorbox}
+
+\studentTodo{Complete the text as a team, defining a subsubsection for each interaction, or to note the lack of interactions}
+
+% ------------------------- SUB-SECTION -------------------------
+\subsection{Design Decisions, Motivations and Alternatives}
+
+Here you should explain the key design decisions you made and the motivations behind them.
+Discuss any alternative approaches you considered and why you rejected them.
+
+Recommendations:
+\begin{itemize}
+    \item discuss realistic alternatives, that you actually considered
+    \item describe each alternative briefly, without going into significant details
+\end{itemize}
+
+\begin{tcolorbox}[title={Example}]
+\paragraph{Timer} The timers are checked in the system timer interrupt (\lstinline{ExSystemTimerTick}), which is simple and already provided, but
+its main disadvantage is that it's not precise. An alternative that should have significantly better precision is to use ACPI or PIT timer, by
+programming the next interrupt to be exactly at the trigger time of the next timer. This requires both a significant amount of
+research to understand how these mechanisms and their implementation works, so we discarded this option.
+
+\paragraph{Priority Scheduler. Fixed Priority Scheduler} The data structure used to store waiting/blocked threads was implemented as a doubly-linked circular list, and uses \lstinline{InsertOrderedList},
+because this required the least amount of implementation work, and is easy to understand.
+The main alternative is using a more efficient data structure, for example, an array of doubly-link circular lists, with one list for each priority level. While this would be more efficient, it would also use more memory
+and would take more effort to implement.
+
+\paragraph{Priority Scheduler. Priority Donation} In the ``donation tree'', we always propagate the priority of the donor thread to the root, because
+it's easy to prove correct. We considered if this is really needed, and if we could stop early when we see a mutex or thread with a higher priority
+down the chain, but discarded the idea because we weren't sure that we covered all edge cases.
+\end{tcolorbox}
+
+\subsubsection{\taskA}
+
+\studentTodo{Complete the text for \taskA}
+
+\subsubsection{\taskB}
+
+\studentTodo{Complete the text for \taskB}
+
+\subsubsection{\taskC}
+
+\studentTodo{Complete the text for \taskC}
+
+
+% ============================= SECTION =============================
+\section{Implementation Considerations}
+
+Here you should describe the practical aspects that you needed to take into consideration during the implementation.
+This can include:
+
+\begin{itemize}
+    \item main challenges and issues encountered during the implementation
+    \item interesting bugs encountered, how you found the root cause, how you fixed them and how you could prevent similar bugs in the future
+    \item test cases that required more effort to pass than you expected
+\end{itemize}
+
+\begin{tcolorbox}[title={Example}]
+\paragraph{Timer} We noticed that all timer tests already passed before starting the implementation, but they started to fail once
+we introduced partial modifications into the code.
+
+\paragraph{Priority Scheduler. Fixed Priority Scheduler}
+To force other CPUs to yield, we used \lstinline{SmpIpiSendToAllIncludingSelf} and initially called \lstinline{ThreadYield} inside the IPI,
+but we noticed that the system would deadlock after a while. We then understood that functions that invoke the scheduler can't be
+called inside an interrupt. So to fix the issue, we instead set the \lstinline{YieldOnInterruptReturn} field of the current CPU.
+\end{tcolorbox}
+
+\subsubsection{\taskA}
+
+\studentTodo{Complete the text for \taskA}
+
+\subsubsection{\taskB}
+
+\studentTodo{Complete the text for \taskB}
+
+\subsubsection{\taskC}
+
+\studentTodo{Complete the text for \taskC}

@@ -1,0 +1,162 @@
+
+\chapter{Design of Module \textit{Threads}}
+
+\renewcommand{\taskA}{\textit{Timer}}
+\renewcommand{\taskB}{\textit{Priority Scheduler. Fixed Priority Scheduler}}
+\renewcommand{\taskC}{\textit{Priority Scheduler. Priority Donation}}
+
+\section*{Notes}
+
+\textbf{The final design document delivered for each module must not exceed 2 pages per student and 7 pages in total.}
+
+% ============================= SECTION =============================
+\section{Module Overview and Requirements}
+
+\subsubsection{Timer}
+
+We must change the given executive timer functionality, such that to not use anymore the busy waiting technique in
+function \lstinline|ExTimerWait()|, but a blocking mechanism, which suspends the waiting thread (i.e. takes the CPU from it) until the waited timer expires.
+
+\subsubsection{Priority Scheduler. Fixed Priority Scheduler}
+\label{subsubsec:prio-sched}
+
+We must implement a priority-based thread scheduling policy (algorithm), which means the scheduler must consider threads'
+priorities when deciding which thread to be given an available CPU. The main scheduling rule is that when a thread must
+be chosen, the one with the higher priority must be the choice. 
+The scheduler must be preemptive, which means it must always assure that threads with the highest priorities (considering multiple CPUs)
+are the ones run at any moment. This could suppose a currently running thread could be suspended, when a new higher-priority thread occurs. 
+
+\subsubsection{Priority Scheduler. Priority Donation}
+
+We must implement (temporary) priority donation as a solution to the ``priority inversion'' problem.
+Priority inversion correspond to situations when a thread with a higher priority wait for a thread with a smaller priority
+(contrary to the priority-based rule, which requires the opposite).
+Such a situation occur when a thread with a smaller priority succeeds taking a lock, which will be later on required by
+a higher-priority thread. In order to avoid having the higher-priority thread waiting for smaller-priority threads
+(others than the lock holder, but having a higher priority than it), the higher thread donates its priority to the lock
+holder (smaller thread) until the lock will be released. In the meantime, no other ``in-between'' thread, could block the
+lock holder and consequently the waiting higher-priority thread.  
+
+% \subsubsection{Advanced Scheduler (MLFQ). Dynamic-Priority Scheduler - ONLY FOR TEAMS WITH 4 MEMBERS}
+
+% We must implement a priority-based scheduler, but differently by the one describe at Section~\ref{subsubsec:prio-sched},
+% we must establish thread priority dynamically, during thread runtime, based on some given criteria
+% (like time consumed for running, i.e. using, on the CPU, time spent waiting for a CPU or for some other event).
+% The required algorithm is called multi-level feedback queue (MLFQ), suggesting the continuous increase or decrease of
+% thread priorities, based on their runtime behavior.
+
+% ============================= SECTION =============================
+\section{Design Details}
+
+% ------------------------- SUB-SECTION -------------------------
+\subsection{Design Description}
+
+\subsubsection{\taskA}
+
+\studentTodo{Complete the text for \taskA}
+
+\subsubsection{\taskB}
+
+\studentTodo{Complete the text for \taskB}
+
+\subsubsection{\taskC}
+
+\studentTodo{Complete the text for \taskC}
+
+% ------------------------- SUB-SECTION -------------------------
+\subsection{Interactions Between Components (Student Tasks)}
+
+\studentTodo{Complete the text as a team, defining a subsubsection for each interaction, or to note the lack of interactions}
+
+% ------------------------- SUB-SECTION -------------------------
+\subsection{Design Decisions, Motivations and Alternatives}
+
+\subsubsection{\taskA}
+
+\studentTodo{Complete the text for \taskA}
+
+\subsubsection{\taskB}
+
+\studentTodo{Complete the text for \taskB}
+
+\subsubsection{\taskC}
+
+\studentTodo{Complete the text for \taskC}
+
+
+% ============================= SECTION =============================
+\section{Implementation Considerations}
+
+\subsubsection{\taskA}
+
+\studentTodo{Complete the text for \taskA}
+
+\subsubsection{\taskB}
+
+\studentTodo{Complete the text for \taskB}
+
+\subsubsection{\taskC}
+
+\studentTodo{Complete the text for \taskC}
+
+% ================================================================================= %
+\section{Questions that you could be asked}
+
+This section must be removed. This is only to give you some hints for your design. 
+
+Some questions you have to answer (inspired from the original Pintos design templates), but these are not the only possible questions and we insist that your design should not be based exclusively to answering such questions:\begin{enumerate}
+    \item timer
+        \begin{itemize}
+            \item Briefly describe what happens in a call to \textit{ExTimerWait()}, including the effects of the timer interrupt handler.
+            \item What steps are taken to minimize the amount of time spent in the timer interrupt handler?
+            \item How are race conditions avoided when multiple threads call \textit{ExTimerWait()} simultaneously?
+            \item How are race conditions avoided when a timer interrupt occurs during a call to \textit{ExTimerWait()}?
+        \end{itemize}
+    
+    \item priority scheduler
+        \begin{itemize}
+            \item How do you ensure that the highest priority thread waiting for a mutex or executive event wakes up first?
+    
+            \item Describe the sequence of events when a call to \textit{MutexAcquire()} causes a priority donation.  How is nested donation handled?
+            
+            \item Describe the sequence of events when \textit{MutexRelease()} is called on a lock that a higher-priority thread is waiting for.
+            
+            \item Describe a potential race in \textit{ThreadSetPriority()} and explain how your implementation avoids it.  Can you use a lock to avoid this race?
+        \end{itemize}
+
+    \item advanced scheduler (MLFQ)
+        \begin{itemize}
+            \item Suppose threads A, B, and C have nice values 0, 1, and 2. Each has a \textit{recent\_cpu} value of 0.  Fill in the Table~\ref{tlb:mlfq-tracing}  (note: you can use \url{http://www.tablesgenerator.com/} to easily generate Latex tables) showing the scheduling decision and the priority and \textit{recent\_cpu} values for each thread after each given number of timer ticks:
+
+% Please add the following required packages to your document preamble:
+% \usepackage{multirow}
+\begin{table}[]
+\centering
+\caption{MLFQ Tracing Example}
+\label{tlb:mlfq-tracing}
+\begin{tabular}{|l|l|l|l|l|l|l|l|}
+\hline
+\multirow{2}{*}{timer ticks} & \multicolumn{3}{l|}{recent\_cpu} & \multicolumn{3}{l|}{priority} & \multirow{2}{*}{thread to run} \\ \cline{2-7}
+                             & A         & B         & C        & A        & B        & C       &                                \\ \hline
+0                            &           &           &          &          &          &         &                                \\ \hline
+4                            &           &           &          &          &          &         &                                \\ \hline
+8                            &           &           &          &          &          &         &                                \\ \hline
+12                           &           &           &          &          &          &         &                                \\ \hline
+16                           &           &           &          &          &          &         &                                \\ \hline
+20                           &           &           &          &          &          &         &                                \\ \hline
+24                           &           &           &          &          &          &         &                                \\ \hline
+28                           &           &           &          &          &          &         &                                \\ \hline
+32                           &           &           &          &          &          &         &                                \\ \hline
+36                           &           &           &          &          &          &         &                                \\ \hline
+\end{tabular}
+\end{table}
+
+
+            \item Did any ambiguities in the scheduler specification make values in the table uncertain?  If so, what rule did you use to resolve them?  Does this match the behavior of your scheduler?
+            
+            \item How is the way you divided the cost of scheduling between code inside and outside interrupt context likely to affect performance?
+
+        \end{itemize}
+
+    
+\end{enumerate}

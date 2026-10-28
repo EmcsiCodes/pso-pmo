@@ -2,10 +2,14 @@
 #include "ex_system.h"
 #include "thread_internal.h"
 
+#include "ex_timer.h"
+
 void
 ExSystemTimerTick(
     void
     )
 {
+    ExTimerCheckAll();
+
     ThreadTick();
 }

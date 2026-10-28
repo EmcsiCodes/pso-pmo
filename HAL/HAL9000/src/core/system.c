@@ -25,6 +25,8 @@
 #include "display.h"
 #include "debug_database.h"
 
+#include "ex_timer.h"
+
 #define NO_OF_TSS_STACKS             7
 STATIC_ASSERT(NO_OF_TSS_STACKS <= NO_OF_IST);
 
@@ -65,6 +67,10 @@ SystemPreinit(
     BootModulesPreinit();
     DumpPreinit();
     ExEventSystemPreinit();
+
+    //NEW (Timer system for Threads to wait on)
+    ExTimerSystemPreinit();
+
     MutexSystemPreinit();
     ThreadSystemPreinit();
     printSystemPreinit(&displayInformation);

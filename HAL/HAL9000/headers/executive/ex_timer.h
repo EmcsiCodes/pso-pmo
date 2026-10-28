@@ -1,5 +1,7 @@
 #pragma once
 
+#include "ex_event.h"
+
 typedef enum _EX_TIMER_TYPE
 {
     ExTimerTypeAbsolute,
@@ -20,7 +22,26 @@ typedef struct _EX_TIMER
 
     volatile BOOLEAN    TimerStarted;
     BOOLEAN             TimerUninited;
+
+    EX_EVENT TimerEvent; //The event manages waiting threads
+    LIST_ENTRY TimerListElem; //The list entry helps the operating system find timers that have expired
+
 } EX_TIMER, *PEX_TIMER;
+
+//******************************************************************************
+// Function:     ExTimerSystemPreinit
+// Description:  Initializes the global timer management system.
+//               Initializes the lock protecting the global timer list and
+//               prepares an empty linked list for storing system timers.
+//               Must be called once during system startup, before any timers
+//               are initialized or used.
+// Returns:      void
+// Parameter:    void
+//******************************************************************************
+void
+ExTimerSystemPreinit(
+    void
+    );
 
 //******************************************************************************
 // Function:     ExTimerInit
@@ -115,4 +136,20 @@ INT64
 ExTimerCompareTimers(
     IN      PEX_TIMER     FirstElem,
     IN      PEX_TIMER     SecondElem
+    );
+
+
+//******************************************************************************
+// Function:     ExTimerCheckAll
+// Description:  Checks the global timer list for expired timers.
+//               Signals the events associated with expired timers,
+//               waking all threads waiting on them.
+//               Periodic timers are rescheduled for their next expiration.
+//               This function is called from the system timer interrupt.
+// Returns:      void
+// Parameter:    void
+//******************************************************************************
+void
+ExTimerCheckAll(
+    void
     );

@@ -152,7 +152,7 @@ ExEventWaitForSignal(
 
     ASSERT(NULL != Event);
 
-    pCurrentThread = GetCurrentThread();
+    pCurrentThread = GetCurrentThread(); //gets current thread pointer that is running on the current CPU
 
     ASSERT( NULL != pCurrentThread);
 

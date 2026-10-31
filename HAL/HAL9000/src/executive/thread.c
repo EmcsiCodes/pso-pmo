@@ -168,7 +168,7 @@ ThreadSystemGetThreadList(
     ASSERT(ListHead != NULL);
 
     *ListLock = &m_threadSystemData.AllThreadsLock;
-    *ListHead = &m_threadSystemData.AllThreadsList; 
+    *ListHead = &m_threadSystemData.AllThreadsList;
 }
 
 STATUS
@@ -508,7 +508,7 @@ ThreadYield(
     LockAcquire(&m_threadSystemData.ReadyThreadsLock, &dummyState);
     if (pThread != pCpu->ThreadData.IdleThread)
     {
-        InsertTailList(&m_threadSystemData.ReadyThreadsList, &pThread->ReadyList);
+        InsertOrderedList(&m_threadSystemData.ReadyThreadsList, &pThread->ReadyList, *_ThreadPriorityCopmpareListElems, NULL);
     }
     if (!bForcedYield)
     {
@@ -563,7 +563,7 @@ ThreadUnblock(
     ASSERT(ThreadStateBlocked == Thread->State);
 
     LockAcquire(&m_threadSystemData.ReadyThreadsLock, &dummyState);
-    InsertTailList(&m_threadSystemData.ReadyThreadsList, &Thread->ReadyList);
+    InsertOrderedList(&m_threadSystemData.ReadyThreadsList, &Thread->ReadyList, _ThreadPriorityCopmpareListElems, NULL);
     Thread->State = ThreadStateReady;
     LockRelease(&m_threadSystemData.ReadyThreadsLock, dummyState );
     LockRelease(&Thread->BlockLock, oldState);
@@ -1236,7 +1236,7 @@ _ThreadDestroy(
     }
 
     ProcessRemoveThreadFromList(pThread);
-    
+
     ExEventDestroy(&pThread->TerminationEvt);
     LockDestroy(&pThread->BlockLock);
 
@@ -1276,4 +1276,29 @@ _ThreadKernelFunction(
 
     ThreadExit(exitStatus);
     NOT_REACHED;
+}
+
+static
+INT64
+CompareThreadPriority(PTHREAD FirstThread, PTHREAD SecondThread)
+{
+    // int64 cast mert ugy tunik a type nem signed es akkor atwrapel minuszba
+    return (INT64)SecondThread->Priority - (INT64)FirstThread->Priority;
+}
+
+INT64 _ThreadPriorityCopmpareListElems(
+    IN PLIST_ENTRY FirstElem,
+    IN PLIST_ENTRY SecondElem,
+    IN_OPT PVOID Context)
+{
+    PTHREAD pFirstThread;
+    PTHREAD pSecondThread;
+
+    // need this line otherwise compile error
+    UNREFERENCED_PARAMETER(Context);
+
+    pFirstThread = CONTAINING_RECORD(FirstElem, THREAD, ReadyList);
+    pSecondThread = CONTAINING_RECORD(SecondElem, THREAD, ReadyList);
+
+    return CompareThreadPriority(pFirstThread, pSecondThread);
 }

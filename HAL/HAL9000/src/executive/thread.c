@@ -715,6 +715,8 @@ ThreadSetPriority(
     GetCurrentThread()->RealPriority = NewPriority;
     MutexRecomputeThreadPriority(GetCurrentThread());
     MutexDonationUnlock(donationState);
+
+    YieldIfPreempted();
 }
 
 STATUS

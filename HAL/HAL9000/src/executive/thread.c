@@ -148,6 +148,12 @@ _ThreadShouldPreemptCurrent(
     void
     );
 
+static
+void
+_ThreadNotifyOtherCpus(
+    void
+    );
+
 static FUNC_IpcProcessEvent     _ThreadPreemptCheckIpi;
 
 void
@@ -584,8 +590,8 @@ ThreadUnblock(
         GetCurrentPcpu()->ThreadData.YieldOnInterruptReturn = TRUE;
     }
 
-    // // Notify other CPUs to consider switching
-    SmpSendGenericIpi(_ThreadPreemptCheckIpi, NULL, NULL, NULL, FALSE);
+    // Notify other CPUs to consider switching
+    _ThreadNotifyOtherCpus();
 }
 
 void
@@ -1383,6 +1389,21 @@ _ThreadPreemptCheckIpi(
     }
 
     return STATUS_SUCCESS;
+}
+
+static
+void
+_ThreadNotifyOtherCpus(
+    void
+    )
+{
+    // early boot: nobody to notify
+    if (SmpGetNumberOfActiveCpus() <= 1)
+    {
+        return;
+    }
+
+    SmpSendGenericIpi(_ThreadPreemptCheckIpi, NULL, NULL, NULL, FALSE);
 }
 
 void

@@ -128,6 +128,8 @@ ExEventSignal(
     }
 
     LockRelease(&Event->EventLock, oldState);
+
+    ThreadYieldIfPreempted();
 }
 
 void

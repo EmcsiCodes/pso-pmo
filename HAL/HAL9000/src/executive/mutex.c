@@ -177,6 +177,8 @@ MutexRelease(
     _Analysis_assume_lock_released_(*Mutex);
 
     LockRelease(&Mutex->MutexLock, oldState);
+
+    ThreadYieldIfPreempted();
 }
 
 _No_competing_thread_

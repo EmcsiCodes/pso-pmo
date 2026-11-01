@@ -297,3 +297,8 @@ void
 ThreadSetPriority(
     IN      THREAD_PRIORITY     NewPriority
     );
+
+void
+ThreadYieldIfPreempted(
+    void
+    );

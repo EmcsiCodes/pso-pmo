@@ -126,3 +126,8 @@ INT64 _ThreadPriorityCopmpareListElems (
     IN PLIST_ENTRY SecondElem,
     IN_OPT PVOID Context
     );
+
+BOOLEAN
+ThreadRepositionAfterPriorityChange(
+    INOUT   PTHREAD             Thread
+    );

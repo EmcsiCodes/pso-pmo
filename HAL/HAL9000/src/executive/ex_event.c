@@ -161,9 +161,16 @@ ExEventWaitForSignal(
     newState = ExEventTypeNotification == Event->EventType;
 
     oldState = CpuIntrDisable();
-    while (TRUE != AtomicCompareExchange8(&Event->Signaled, newState, TRUE))
+    while (TRUE)
     {
         LockAcquire(&Event->EventLock, &dummyState);
+
+        if(TRUE == AtomicCompareExchange8(&Event->Signaled, newState, TRUE))
+        {
+            LockRelease(&Event->EventLock, dummyState);
+            break;
+        }
+
         InsertOrderedList(&Event->WaitingList, &pCurrentThread->ReadyList, _ThreadPriorityCopmpareListElems, NULL);
         ThreadTakeBlockLock();
         LockRelease(&Event->EventLock, dummyState);

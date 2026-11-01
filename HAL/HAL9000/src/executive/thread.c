@@ -709,7 +709,12 @@ ThreadSetPriority(
 {
     ASSERT(ThreadPriorityLowest <= NewPriority && NewPriority <= ThreadPriorityMaximum);
 
-    GetCurrentThread()->Priority = NewPriority;
+    INTR_STATE donationState;
+    
+    MutexDonationLock(&donationState);    
+    GetCurrentThread()->RealPriority = NewPriority;
+    MutexRecomputeThreadPriority(GetCurrentThread());
+    MutexDonationUnlock(donationState);
 }
 
 STATUS
@@ -843,6 +848,9 @@ _ThreadInit(
         pThread->Id = _ThreadSystemGetNextTid();
         pThread->State = ThreadStateBlocked;
         pThread->Priority = Priority;
+        pThread->RealPriority = Priority;
+        pThread->WaitingMutex = NULL;
+        InitializeListHead(&pThread->AcquiredMutexList);
 
         LockInit(&pThread->BlockLock);
         LockSetName(&pThread->BlockLock, "ThrBlock");
@@ -1402,5 +1410,52 @@ ThreadYieldIfPreempted(
         // If interrupts not ON, the function is called from an ISR
         // => not safe to yield here, just set the flag.
         GetCurrentPcpu()->ThreadData.YieldOnInterruptReturn = TRUE;
+    }
+}
+
+BOOLEAN
+ThreadRepositionAfterPriorityChange(
+    INOUT PTHREAD Thread)
+{
+    INTR_STATE oldState;
+    BOOLEAN result = FALSE;
+
+    ASSERT(NULL != Thread);
+
+    LockAcquire(&m_threadSystemData.ReadyThreadsLock, &oldState);
+    if(Thread->State == ThreadStateReady) {
+        RemoveEntryList(&Thread->ReadyList);
+        InsertOrderedList(&m_threadSystemData.ReadyThreadsList, &Thread->ReadyList, _ThreadPriorityCopmpareListElems, NULL);
+        result = TRUE;
+    }
+    LockRelease(&m_threadSystemData.ReadyThreadsLock, oldState);
+    return result;
+}
+
+void
+ThreadPreemptLowerPriorityCpus(
+    IN THREAD_PRIORITY NewPriority)
+{
+    PLIST_ENTRY pCpuListHead = NULL;
+    PPCPU pSelf = GetCurrentPcpu();
+
+    SmpGetCpuList(&pCpuListHead);
+
+    for (PLIST_ENTRY pEntry = pCpuListHead->Flink;
+         pEntry != pCpuListHead;
+         pEntry = pEntry->Flink)
+    {
+        PPCPU pCpu = CONTAINING_RECORD(pEntry, PCPU, ListEntry);
+        PTHREAD pRunning = pCpu->ThreadData.CurrentThread;
+        SMP_DESTINATION dest = {0};
+
+        if (pCpu == pSelf)
+        {
+            continue;
+        }
+
+        dest.Cpu.ApicId = pCpu->ApicId;
+        SmpSendGenericIpiEx(_ThreadPreemptCheckIpi, NULL, NULL, NULL, FALSE,
+                            SmpIpiSendToCpu, dest);
     }
 }

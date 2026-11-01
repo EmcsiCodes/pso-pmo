@@ -8,7 +8,7 @@
 typedef struct EX_EVENT_SYSTEM_DATA
 {
     LOCK            Lock;
-    LIST_ENTRY      EventList; 
+    LIST_ENTRY      EventList;
 } EX_EVENT_SYSTEM_DATA, *PEX_EVENT_SYSTEM_DATA;
 
 static EX_EVENT_SYSTEM_DATA m_exEventData;
@@ -109,7 +109,7 @@ ExEventSignal(
 
     LockAcquire(&Event->EventLock, &oldState);
     AtomicExchange8(&Event->Signaled, TRUE);
-    
+
     for(pEntry = RemoveHeadList(&Event->WaitingList);
         pEntry != &Event->WaitingList;
         pEntry = RemoveHeadList(&Event->WaitingList)
@@ -128,6 +128,8 @@ ExEventSignal(
     }
 
     LockRelease(&Event->EventLock, oldState);
+
+    ThreadYieldIfPreempted();
 }
 
 void
@@ -162,7 +164,7 @@ ExEventWaitForSignal(
     while (TRUE != AtomicCompareExchange8(&Event->Signaled, newState, TRUE))
     {
         LockAcquire(&Event->EventLock, &dummyState);
-        InsertTailList(&Event->WaitingList, &pCurrentThread->ReadyList);
+        InsertOrderedList(&Event->WaitingList, &pCurrentThread->ReadyList, _ThreadPriorityCopmpareListElems, NULL);
         ThreadTakeBlockLock();
         LockRelease(&Event->EventLock, dummyState);
         ThreadBlock();

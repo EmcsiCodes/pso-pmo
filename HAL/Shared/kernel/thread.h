@@ -119,3 +119,10 @@ THREAD_PRIORITY
 ThreadGetPriority(
     IN_OPT  PTHREAD             Thread
     );
+
+
+INT64 _ThreadPriorityCopmpareListElems (
+    IN PLIST_ENTRY FirstElem,
+    IN PLIST_ENTRY SecondElem,
+    IN_OPT PVOID Context
+    );

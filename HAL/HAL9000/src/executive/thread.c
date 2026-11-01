@@ -14,6 +14,7 @@
 #include "cal_atomic.h"
 #include "cal_assembly.h"
 #include "cal_seh.h"
+#include "smp.h"
 
 #define TID_INCREMENT               4
 
@@ -141,6 +142,14 @@ _ThreadKernelFunction(
 
 static FUNC_ThreadStart     _IdleThread;
 
+static
+BOOLEAN
+_ThreadShouldPreemptCurrent(
+    void
+    );
+
+static FUNC_IpcProcessEvent     _ThreadPreemptCheckIpi;
+
 void
 _No_competing_thread_
 ThreadSystemPreinit(
@@ -168,7 +177,7 @@ ThreadSystemGetThreadList(
     ASSERT(ListHead != NULL);
 
     *ListLock = &m_threadSystemData.AllThreadsLock;
-    *ListHead = &m_threadSystemData.AllThreadsList; 
+    *ListHead = &m_threadSystemData.AllThreadsList;
 }
 
 STATUS
@@ -445,6 +454,8 @@ MSVC_WARNING_SUPPRESS(4152)
 
     *Thread = pThread;
 
+    ThreadYieldIfPreempted();
+
     return status;
 }
 
@@ -508,7 +519,7 @@ ThreadYield(
     LockAcquire(&m_threadSystemData.ReadyThreadsLock, &dummyState);
     if (pThread != pCpu->ThreadData.IdleThread)
     {
-        InsertTailList(&m_threadSystemData.ReadyThreadsList, &pThread->ReadyList);
+        InsertOrderedList(&m_threadSystemData.ReadyThreadsList, &pThread->ReadyList, *_ThreadPriorityCopmpareListElems, NULL);
     }
     if (!bForcedYield)
     {
@@ -563,10 +574,18 @@ ThreadUnblock(
     ASSERT(ThreadStateBlocked == Thread->State);
 
     LockAcquire(&m_threadSystemData.ReadyThreadsLock, &dummyState);
-    InsertTailList(&m_threadSystemData.ReadyThreadsList, &Thread->ReadyList);
+    InsertOrderedList(&m_threadSystemData.ReadyThreadsList, &Thread->ReadyList, _ThreadPriorityCopmpareListElems, NULL);
     Thread->State = ThreadStateReady;
     LockRelease(&m_threadSystemData.ReadyThreadsLock, dummyState );
     LockRelease(&Thread->BlockLock, oldState);
+
+    // Make the thread yield later if it has to
+    if (_ThreadShouldPreemptCurrent()) {
+        GetCurrentPcpu()->ThreadData.YieldOnInterruptReturn = TRUE;
+    }
+
+    // // Notify other CPUs to consider switching
+    SmpSendGenericIpi(_ThreadPreemptCheckIpi, NULL, NULL, NULL, FALSE);
 }
 
 void
@@ -1236,7 +1255,7 @@ _ThreadDestroy(
     }
 
     ProcessRemoveThreadFromList(pThread);
-    
+
     ExEventDestroy(&pThread->TerminationEvt);
     LockDestroy(&pThread->BlockLock);
 
@@ -1276,4 +1295,112 @@ _ThreadKernelFunction(
 
     ThreadExit(exitStatus);
     NOT_REACHED;
+}
+
+static
+INT64
+CompareThreadPriority(PTHREAD FirstThread, PTHREAD SecondThread)
+{
+    // int64 cast mert ugy tunik a type nem signed es akkor atwrapel minuszba
+    return (INT64)SecondThread->Priority - (INT64)FirstThread->Priority;
+}
+
+INT64 _ThreadPriorityCopmpareListElems(
+    IN PLIST_ENTRY FirstElem,
+    IN PLIST_ENTRY SecondElem,
+    IN_OPT PVOID Context)
+{
+    PTHREAD pFirstThread;
+    PTHREAD pSecondThread;
+
+    // need this line otherwise compile error
+    UNREFERENCED_PARAMETER(Context);
+
+    pFirstThread = CONTAINING_RECORD(FirstElem, THREAD, ReadyList);
+    pSecondThread = CONTAINING_RECORD(SecondElem, THREAD, ReadyList);
+
+    return CompareThreadPriority(pFirstThread, pSecondThread);
+}
+
+static
+BOOLEAN
+_ThreadShouldPreemptCurrent(
+    void
+    )
+{
+    INTR_STATE oldState;
+    BOOLEAN restult;
+
+    LockAcquire(&m_threadSystemData.ReadyThreadsLock, &oldState);
+
+    PPCPU pCpu;
+    PTHREAD pCurrentThread;
+    PTHREAD pBestThread;
+
+    pCpu = GetCurrentPcpu();
+    pCurrentThread = GetCurrentThread();
+
+    if (NULL == pCpu || NULL == pCurrentThread || NULL == pCpu->ThreadData.IdleThread){
+        LockRelease(&m_threadSystemData.ReadyThreadsLock, oldState);
+        return FALSE;
+    }
+
+    // List is empty
+    if (m_threadSystemData.ReadyThreadsList.Flink == &m_threadSystemData.ReadyThreadsList) {
+        LockRelease(&m_threadSystemData.ReadyThreadsLock, oldState);
+        return FALSE;
+    }
+
+    // Check if in idle thread currently
+    if (pCurrentThread == pCpu->ThreadData.IdleThread){
+        LockRelease(&m_threadSystemData.ReadyThreadsLock, oldState);
+        return TRUE;
+    }
+
+    pBestThread = CONTAINING_RECORD(m_threadSystemData.ReadyThreadsList.Flink, THREAD, ReadyList);
+
+    restult = pBestThread->Priority > pCurrentThread->Priority;
+
+    LockRelease(&m_threadSystemData.ReadyThreadsLock, oldState);
+
+    return restult;
+}
+
+static
+STATUS
+_ThreadPreemptCheckIpi(
+    IN_OPT PVOID Context
+    )
+{
+    PPCPU pCpu;
+
+    UNREFERENCED_PARAMETER(Context);
+
+    pCpu = GetCurrentPcpu();
+
+    if (NULL != pCpu && _ThreadShouldPreemptCurrent()) {
+        pCpu->ThreadData.YieldOnInterruptReturn = TRUE;
+    }
+
+    return STATUS_SUCCESS;
+}
+
+void
+ThreadYieldIfPreempted(
+    void
+    )
+{
+    if(!_ThreadShouldPreemptCurrent()) {
+        return;
+    }
+
+    if (INTR_ON == CpuIntrGetState()) {
+        // Can switch now
+        ThreadYield();
+    }
+    else {
+        // If interrupts not ON, the function is called from an ISR
+        // => not safe to yield here, just set the flag.
+        GetCurrentPcpu()->ThreadData.YieldOnInterruptReturn = TRUE;
+    }
 }
